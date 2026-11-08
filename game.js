@@ -3,7 +3,8 @@
 (function (root) {
   var D = root.DATA || (typeof require !== "undefined" ? require("./data.js") : null);
   var C = D.C;
-  var THIEF = "thief", DETECTIVE = "detective", SPY = "spy", AFERIST = "aferist", ACCOMPLICE = "accomplice";
+  var THIEF = "thief", DETECTIVE = "detective", SPY = "spy", AFERIST = "aferist", ACCOMPLICE = "accomplice",
+    NOTARY = "notary";
   var FINAL_ROUND = D.MAX_ROUND + 1;
 
   // ---------- random helpers (rng = { random: () => [0,1) }) ----------
@@ -38,6 +39,7 @@
   function rolesFor(n, rng) {
     if (n === 3) return [THIEF, DETECTIVE, choice(rng, [SPY, AFERIST])];
     if (n === 5) return D.ROLE_IDS.concat([ACCOMPLICE]);
+    if (n === 6) return D.ROLE_IDS.concat([ACCOMPLICE, NOTARY]);
     return D.ROLE_IDS.slice();
   }
 
@@ -49,7 +51,7 @@
   }
 
   var G = {
-    D: D, C: C, THIEF: THIEF, DETECTIVE: DETECTIVE, SPY: SPY, AFERIST: AFERIST, ACCOMPLICE: ACCOMPLICE,
+    D: D, C: C, THIEF: THIEF, DETECTIVE: DETECTIVE, SPY: SPY, AFERIST: AFERIST, ACCOMPLICE: ACCOMPLICE, NOTARY: NOTARY,
     FINAL_ROUND: FINAL_ROUND, seeded: seeded, choice: choice, sample: sample, shuffle: shuffle,
     randrange: randrange, range: range, fmt: fmt, rules: rules, rolesFor: rolesFor,
   };
@@ -70,7 +72,7 @@
       court_done: false, thief_caught: false, court_verdict: "", trial_done: false, fragment_step: 0,
       final_paid: false, spot_ids: sample(rng, range(D.SPOTS.length), C.TOTAL_CLUES + 2),
       alibi_places: [], alibi_true: 0, alibi_known: {}, alibi_answers: {}, forgetful: null,
-      fake_armed: false, fake_given_to: null, timer_left: 0, mode: mode || C.DEFAULT_MODE, log: [],
+      fake_armed: false, fake_given_to: null, timer_left: 0, mode: mode || C.DEFAULT_MODE, notary_book: [], log: [],
     };
     G.makeAlibis(st, rng);
     G.note(st, "Новая партия: " + names.join(", "));
@@ -396,7 +398,9 @@
     return { text: text, isNew: isNew };
   };
 
-  G.recordDeal = function (st, seller, buyer, price, item, digitPos, guaranteed) {
+  // guaranteed: the notary certifies the deal, the buyer pays NOTARY_FEE «to the bank»; with a Notary in the
+  // game that money secretly goes to them at the final count. what = the secret content (for the Notary's ability).
+  G.recordDeal = function (st, seller, buyer, price, item, digitPos, guaranteed, what) {
     var s = st.players[seller], b = st.players[buyer];
     item = item || "что-то";
     s.deal_partners.push(buyer);
@@ -404,8 +408,14 @@
     var paid = price > 0 ? G.transfer(st, buyer, seller, price) : 0;
     if (digitPos && digitPos in s.digits) b.digits[digitPos] = s.digits[digitPos];
     var story = s.name + " продаёт " + item + " → " + b.name + (paid ? ", " + paid + " ₽" : ", без денег");
-    // guaranteed: the notary (bank) certifies the deal, the buyer pays NOTARY_FEE to the bank
-    if (guaranteed) story += " + " + G.payBank(st, buyer, C.NOTARY_FEE, "(нотариус)") + " ₽ нотариусу (гарантия)";
+    if (guaranteed) {
+      var fee = G.payBank(st, buyer, C.NOTARY_FEE, "(нотариус)");
+      story += " + " + fee + " ₽ нотариусу (гарантия)";
+      if (digitPos && !what) what = "цифра №" + digitPos + " = " + b.digits[digitPos];
+      st.notary_book = st.notary_book || [];
+      st.notary_book.push({ seller: seller, buyer: buyer, what: what || item });
+      if (G.hasRole(st, NOTARY)) st.players[G.roleIndex(st, NOTARY)].secret_pending += fee;
+    }
     G.note(st, "Сделка: " + story);
     [seller, buyer].forEach(function (i) {
       var p = st.players[i];
@@ -513,6 +523,14 @@
     st.players[i].hints.push("Подсмотрел: " + text);
     return text;
   };
+  // Notary's ability: learn what was sold in guaranteed deal k.
+  G.notaryPeek = function (st, i, k) {
+    st.players[i].ability_used = true;
+    var d = st.notary_book[k], text = G.name(st, d.seller) + " → " + G.name(st, d.buyer) + ": " + d.what;
+    st.players[i].hints.push("Нотариус: " + text);
+    return text;
+  };
+
   G.accomplicePeek = function (st, i) { st.players[i].ability_used = true; return G.digitHint(st, i); };
   G.aferistCancel = function (st, i) {
     var p = st.players[i];
@@ -560,6 +578,11 @@
     } else if (p.role === ACCOMPLICE) {
       if (st.thief_caught) miss.push("вора поймали на суде");
       if (p.balance < R.ACCOMPLICE_MIN) miss.push("меньше " + R.ACCOMPLICE_MIN + " ₽");
+    } else if (p.role === NOTARY) {
+      var book = (st.notary_book || []).length;
+      if (book < R.NOTARY_DEALS) miss.push("сделок с гарантией " + book + " из " + R.NOTARY_DEALS);
+      if (p.balance < R.NOTARY_MIN) miss.push("меньше " + R.NOTARY_MIN + " ₽");
+      if (!p.deal_partners.length) miss.push("нет ни одной своей сделки");
     }
     return miss;
   };

@@ -3,7 +3,7 @@
 (function () {
   "use strict";
   var D = DATA, C = D.C;
-  var THIEF = G.THIEF, DETECTIVE = G.DETECTIVE, SPY = G.SPY, AFERIST = G.AFERIST, ACCOMPLICE = G.ACCOMPLICE;
+  var THIEF = G.THIEF, DETECTIVE = G.DETECTIVE, SPY = G.SPY, AFERIST = G.AFERIST, ACCOMPLICE = G.ACCOMPLICE, NOTARY = G.NOTARY;
   var SAVE_KEY = "ten.current", BACKUP_KEY = "ten.backup", NAMES_KEY = "ten.names";
   var PROMPT_EVERY = 70;
   var SITE_URL = "https://aipanov.github.io/ten/";   // shown in the single-file version
@@ -471,7 +471,7 @@
       var k = res[seller];
       if (k === null || k === undefined) { A.toast("Сделка отменена."); return; }
       var got = G.giveHint(st, seller, buyer, k);
-      var story = G.recordDeal(st, seller, buyer, price, "подсказку", null, true);
+      var story = G.recordDeal(st, seller, buyer, price, "подсказку", null, true, got.text);
       Sound.play("cash");
       A.push(new DealAnnounce(story, price));
       A.push(new PrivateScene("Подсказка от " + G.name(st, seller), [buyer], renderMessage("Купленная подсказка",
@@ -534,7 +534,7 @@
   function suspectBoard(i, title) {
     var st = A.st, p = st.players[i], th = G.thief(st);
     var cands = p.role !== THIEF ? G.candidates(st, i) : G.others(st, i);
-    var cols = Math.min(st.players.length, 5);
+    var cols = st.players.length === 6 ? 3 : Math.min(st.players.length, 5);   // six: two rows of three
     var cards = st.players.map(function (q, j) {
       if (j === i) return h("div", { class: "sus me" }, h("div", { class: "tag" }, "это ты"), fedora(44, "#46424e", "#9694a0"), h("div", { class: "nm" }, q.name));
       if (p.role === ACCOMPLICE && j === th)
@@ -630,6 +630,13 @@
       act = open.length ? h("div", { class: "grid2" }, open.map(function (k) {
         return btn("Заглянуть в " + (k + 1), function () { scene.data.msg = G.spyPeek(st, i, k); }, { kind: "accent" });
       })) : h("p", { class: "muted" }, "Все конверты уже проданы.");
+    } else if (p.role === NOTARY) {
+      var book = st.notary_book || [];
+      act = book.length ? h("div", { class: "stack" }, book.map(function (d, k) {
+        return btn("Сделка " + (k + 1) + ": " + G.name(st, d.seller) + " → " + G.name(st, d.buyer), function () {
+          scene.data.msg = "Продано: " + G.notaryPeek(st, i, k);
+        }, { kind: "accent", cls: "slim" });
+      })) : h("p", { class: "muted" }, "Сделок с гарантией пока не было. Сейчас их: 0 из " + R.NOTARY_DEALS + ".");
     } else if (p.role === AFERIST) {
       act = p.last_fine > 0 ? btn("Отменить штраф (" + money(Math.min(p.last_fine, C.AFERIST_CANCEL_MAX)) + ")", function () {
         var got = G.aferistCancel(st, i);
@@ -768,7 +775,7 @@
         h("div", { class: "hero" }, h("div", { class: "stolen" }, painting(150), h("div", { class: "stamp" }, "УКРАДЕНА")),
           fedora(110)),
         logo(),
-        h("p", { class: "muted" }, "семейная детективная игра на 3–5 игроков · от часа до полутора"),
+        h("p", { class: "muted" }, "семейная детективная игра на 3–6 игроков · от часа до полутора"),
         h("div", { class: "stack", style: "margin-top:18px" },
           btn("Новая игра", function () { self.newGame(); }, { kind: "accent huge" }),
           btn("Продолжить партию", function () { self.continueGame(); }, { kind: "big", disabled: !hasSave() }),
@@ -808,6 +815,7 @@
         3: ["3 игрока", "Вор, Детектив и Шпион или Аферист. Вор может подбросить фальшивую улику."],
         4: ["4 игрока", "Классика: Вор, Детектив, Шпион, Аферист."],
         5: ["5 игроков", "Плюс Сообщник — он знает вора и помогает ему."],
+        6: ["6 игроков", "Плюс тайный Нотариус — богатеет, когда люди не доверяют друг другу."],
       };
       var self = this, cards = [];
       for (var n = D.MIN_PLAYERS; n <= D.MAX_PLAYERS; n++) (function (n) {
@@ -1425,7 +1433,7 @@
       if (!this.show)
         return h("div", { class: "screen center" }, icon("scales", 80), h("h1", { style: "font-size:42px;margin-top:8px" }, "Подсчёт"), rule(),
           h("p", { style: "margin:10px 0 16px" }, "Сейчас откроются все роли. Банк выдаёт тайные бонусы ролей " +
-            "(детектив — за улики, аферист — комиссия за сделки, сообщник — доля из сейфа):"),
+            "(детектив — за улики, аферист — комиссия за сделки, сообщник — доля из сейфа, нотариус — плата за гарантии):"),
           h("div", { class: "card stack" }, this.bonusLines.map(function (l) { return h("p", { class: "big" }, l); })),
           h("div", { class: "spacer" }),
           btn("Раскрыть роли и итог", function () { self.show = true; Sound.play("fanfare"); A.scrollTop = true; }, { kind: "accent huge" }));

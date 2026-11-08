@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Тень: Последний миллион</title>
-<meta name="description" content="Семейная детективная игра на 3–5 игроков: телефон — ведущий.">
+<meta name="description" content="Семейная детективная игра на 3–6 игроков: телефон — ведущий.">
 <meta name="theme-color" content="#0e0c12">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -356,6 +356,18 @@ var DATA = {
     "FAKE_HINT": false,
     "CAUGHT_FINE": 1500,
     "ACCOMPLICE_CUT": 1000
+   },
+   "6": {
+    "SPY_MIN": 1200,
+    "AFERIST_MIN": 2000,
+    "DETECTIVE_MIN_HINTS": 4,
+    "ACCOMPLICE_MIN": 1000,
+    "THIEF_FREE_BONUS": 0,
+    "FAKE_HINT": false,
+    "CAUGHT_FINE": 1500,
+    "ACCOMPLICE_CUT": 1000,
+    "NOTARY_DEALS": 3,
+    "NOTARY_MIN": 1500
    }
   },
   "CLUE_REWARD": 300,
@@ -421,10 +433,11 @@ var DATA = {
   "accomplice",
   "detective",
   "spy",
-  "aferist"
+  "aferist",
+  "notary"
  ],
  "MIN_PLAYERS": 3,
- "MAX_PLAYERS": 5,
+ "MAX_PLAYERS": 6,
  "HOW_TO_WIN": [
   [
    "Цель",
@@ -432,7 +445,11 @@ var DATA = {
   ],
   [
    "Роли",
-   "Вор, Детектив, Шпион, Аферист (втроём — без одного из двух последних, впятером — ещё Сообщник вора). Роль тайная. Врать о своей роли можно и нужно."
+   "Вор, Детектив, Шпион, Аферист (втроём — без одного из двух последних, впятером — ещё Сообщник вора, вшестером — и Нотариус). Роль тайная. Врать о своей роли можно и нужно."
+  ],
+  [
+   "Доверие",
+   "Подсказку или цифру кода можно продать шёпотом (дёшево, но можно соврать) или с гарантией нотариуса: покупатель доплачивает 200 ₽, и телефон сам передаёт правду. До подсчёта никто не знает, кто победил: каждый тайно закрывает свою миссию."
   ],
   [
    "Сюжет",
@@ -555,6 +572,25 @@ var DATA = {
     "4. Торгуй всем: подсказками, голосом, обещаниями.",
     "5. Продай свою цифру кода подороже — или соври о ней.",
     "6. Продай свой голос на суде тому, кто больше заплатит."
+   ]
+  },
+  "notary": {
+   "name": "НОТАРИУС",
+   "intro": "Ты заверяешь чужие сделки и богатеешь на недоверии. Чем меньше люди верят друг другу, тем больше гарантий — и тем больше денег у тебя.",
+   "goals": [
+    "Чтобы за игру было хотя бы {NOTARY_DEALS} сделки с гарантией нотариуса (чьи угодно).",
+    "В конце у тебя не меньше {NOTARY_MIN} ₽.",
+    "Заключить хотя бы одну свою сделку."
+   ],
+   "ability": "Один раз: тайно узнать, что именно продали в любой сделке с гарантией (кнопка «Мои улики»).",
+   "secret": "Тайный доход: все 200 ₽ за гарантии, которые покупатели отдают «в банк», на самом деле копятся у тебя — получишь при подсчёте.",
+   "plan": [
+    "1. Слушай алиби: кто врёт — тому потом не поверят без гарантии.",
+    "2. Ищи улики: подсказки — главный товар для сделок с гарантией.",
+    "3. Покупай конверты: подсказки из них тоже продаются.",
+    "4. Сей сомнения: «а вдруг он врёт? Возьми гарантию». Каждая — +200 ₽ тебе.",
+    "5. Цифры кода — самые дорогие сделки. Советуй брать их с гарантией.",
+    "6. Не выдай себя: если узнают, кто нотариус, гарантии перестанут брать."
    ]
   },
   "accomplice": {
@@ -1008,7 +1044,8 @@ var DATA = {
     "thief": "выбери вариант уверенно и держись своей версии",
     "detective": "запоминай, кто не совпал и как оправдывается",
     "spy": "не выделяйся",
-    "aferist": "присмотрись, у кого сколько денег"
+    "aferist": "присмотрись, у кого сколько денег",
+    "notary": "запоминай, кто врёт — им не поверят без гарантии"
    },
    "prompts": [
     "{a}, опиши то место подробно: что там было, где ты сидел?",
@@ -1033,7 +1070,8 @@ var DATA = {
     "thief": "ищи улики тоже — иначе подозрительно",
     "detective": "ищи активнее всех, тебе нужны подсказки",
     "spy": "найденную улику можно продать",
-    "aferist": "улика — это товар"
+    "aferist": "улика — это товар",
+    "notary": "найди улику — будет что продать"
    },
    "prompts": [
     "Подсказка: ответ — предмет, который есть почти в каждой квартире.",
@@ -1058,7 +1096,8 @@ var DATA = {
     "thief": "конверт «Что-то о сейфе» даёт цифру кода",
     "detective": "каждый конверт — подсказка",
     "spy": "загляни в конверт до торгов",
-    "aferist": "выиграй хотя бы один"
+    "aferist": "выиграй хотя бы один",
+    "notary": "конверт — это подсказка на продажу"
    },
    "prompts": [
     "Торг по кругу! Шаг — от 50 ₽. Кто больше?",
@@ -1083,7 +1122,8 @@ var DATA = {
     "thief": "покупай цифры кода",
     "detective": "покупай подсказки, сверяй с доской",
     "spy": "нужны 2 сделки с РАЗНЫМИ людьми",
-    "aferist": "торгуй всем, каждая сделка — доход"
+    "aferist": "торгуй всем, каждая сделка — доход",
+    "notary": "сей сомнения: «возьми гарантию»"
    },
    "prompts": [
     "{a}, предложи {b} сделку прямо сейчас.",
@@ -1109,7 +1149,8 @@ var DATA = {
     "thief": "узнай все 3 цифры и вскрой сейф",
     "detective": "кто лезет в сейф — подозрителен",
     "spy": "продай свою цифру",
-    "aferist": "продай цифру дороже — или соври"
+    "aferist": "продай цифру дороже — или соври",
+    "notary": "цифры — с гарантией, советуй всем"
    },
    "prompts": [
     "У каждого одна попытка. Не тратьте её зря!",
@@ -1134,7 +1175,8 @@ var DATA = {
     "thief": "голосуй против другого",
     "detective": "убеди всех — это твой момент",
     "spy": "не выделяйся, чтобы за тебя не голосовали",
-    "aferist": "продай свой голос"
+    "aferist": "продай свой голос",
+    "notary": "не выдай себя"
    },
    "prompts": [
     "{a}, кого ты обвиняешь? 30 секунд.",
@@ -1156,7 +1198,8 @@ if (typeof module !== 'undefined') module.exports = DATA;
 (function (root) {
   var D = root.DATA || (typeof require !== "undefined" ? require("./data.js") : null);
   var C = D.C;
-  var THIEF = "thief", DETECTIVE = "detective", SPY = "spy", AFERIST = "aferist", ACCOMPLICE = "accomplice";
+  var THIEF = "thief", DETECTIVE = "detective", SPY = "spy", AFERIST = "aferist", ACCOMPLICE = "accomplice",
+    NOTARY = "notary";
   var FINAL_ROUND = D.MAX_ROUND + 1;
 
   // ---------- random helpers (rng = { random: () => [0,1) }) ----------
@@ -1191,6 +1234,7 @@ if (typeof module !== 'undefined') module.exports = DATA;
   function rolesFor(n, rng) {
     if (n === 3) return [THIEF, DETECTIVE, choice(rng, [SPY, AFERIST])];
     if (n === 5) return D.ROLE_IDS.concat([ACCOMPLICE]);
+    if (n === 6) return D.ROLE_IDS.concat([ACCOMPLICE, NOTARY]);
     return D.ROLE_IDS.slice();
   }
 
@@ -1202,7 +1246,7 @@ if (typeof module !== 'undefined') module.exports = DATA;
   }
 
   var G = {
-    D: D, C: C, THIEF: THIEF, DETECTIVE: DETECTIVE, SPY: SPY, AFERIST: AFERIST, ACCOMPLICE: ACCOMPLICE,
+    D: D, C: C, THIEF: THIEF, DETECTIVE: DETECTIVE, SPY: SPY, AFERIST: AFERIST, ACCOMPLICE: ACCOMPLICE, NOTARY: NOTARY,
     FINAL_ROUND: FINAL_ROUND, seeded: seeded, choice: choice, sample: sample, shuffle: shuffle,
     randrange: randrange, range: range, fmt: fmt, rules: rules, rolesFor: rolesFor,
   };
@@ -1223,7 +1267,7 @@ if (typeof module !== 'undefined') module.exports = DATA;
       court_done: false, thief_caught: false, court_verdict: "", trial_done: false, fragment_step: 0,
       final_paid: false, spot_ids: sample(rng, range(D.SPOTS.length), C.TOTAL_CLUES + 2),
       alibi_places: [], alibi_true: 0, alibi_known: {}, alibi_answers: {}, forgetful: null,
-      fake_armed: false, fake_given_to: null, timer_left: 0, mode: mode || C.DEFAULT_MODE, log: [],
+      fake_armed: false, fake_given_to: null, timer_left: 0, mode: mode || C.DEFAULT_MODE, notary_book: [], log: [],
     };
     G.makeAlibis(st, rng);
     G.note(st, "Новая партия: " + names.join(", "));
@@ -1549,7 +1593,9 @@ if (typeof module !== 'undefined') module.exports = DATA;
     return { text: text, isNew: isNew };
   };
 
-  G.recordDeal = function (st, seller, buyer, price, item, digitPos, guaranteed) {
+  // guaranteed: the notary certifies the deal, the buyer pays NOTARY_FEE «to the bank»; with a Notary in the
+  // game that money secretly goes to them at the final count. what = the secret content (for the Notary's ability).
+  G.recordDeal = function (st, seller, buyer, price, item, digitPos, guaranteed, what) {
     var s = st.players[seller], b = st.players[buyer];
     item = item || "что-то";
     s.deal_partners.push(buyer);
@@ -1557,8 +1603,14 @@ if (typeof module !== 'undefined') module.exports = DATA;
     var paid = price > 0 ? G.transfer(st, buyer, seller, price) : 0;
     if (digitPos && digitPos in s.digits) b.digits[digitPos] = s.digits[digitPos];
     var story = s.name + " продаёт " + item + " → " + b.name + (paid ? ", " + paid + " ₽" : ", без денег");
-    // guaranteed: the notary (bank) certifies the deal, the buyer pays NOTARY_FEE to the bank
-    if (guaranteed) story += " + " + G.payBank(st, buyer, C.NOTARY_FEE, "(нотариус)") + " ₽ нотариусу (гарантия)";
+    if (guaranteed) {
+      var fee = G.payBank(st, buyer, C.NOTARY_FEE, "(нотариус)");
+      story += " + " + fee + " ₽ нотариусу (гарантия)";
+      if (digitPos && !what) what = "цифра №" + digitPos + " = " + b.digits[digitPos];
+      st.notary_book = st.notary_book || [];
+      st.notary_book.push({ seller: seller, buyer: buyer, what: what || item });
+      if (G.hasRole(st, NOTARY)) st.players[G.roleIndex(st, NOTARY)].secret_pending += fee;
+    }
     G.note(st, "Сделка: " + story);
     [seller, buyer].forEach(function (i) {
       var p = st.players[i];
@@ -1666,6 +1718,14 @@ if (typeof module !== 'undefined') module.exports = DATA;
     st.players[i].hints.push("Подсмотрел: " + text);
     return text;
   };
+  // Notary's ability: learn what was sold in guaranteed deal k.
+  G.notaryPeek = function (st, i, k) {
+    st.players[i].ability_used = true;
+    var d = st.notary_book[k], text = G.name(st, d.seller) + " → " + G.name(st, d.buyer) + ": " + d.what;
+    st.players[i].hints.push("Нотариус: " + text);
+    return text;
+  };
+
   G.accomplicePeek = function (st, i) { st.players[i].ability_used = true; return G.digitHint(st, i); };
   G.aferistCancel = function (st, i) {
     var p = st.players[i];
@@ -1713,6 +1773,11 @@ if (typeof module !== 'undefined') module.exports = DATA;
     } else if (p.role === ACCOMPLICE) {
       if (st.thief_caught) miss.push("вора поймали на суде");
       if (p.balance < R.ACCOMPLICE_MIN) miss.push("меньше " + R.ACCOMPLICE_MIN + " ₽");
+    } else if (p.role === NOTARY) {
+      var book = (st.notary_book || []).length;
+      if (book < R.NOTARY_DEALS) miss.push("сделок с гарантией " + book + " из " + R.NOTARY_DEALS);
+      if (p.balance < R.NOTARY_MIN) miss.push("меньше " + R.NOTARY_MIN + " ₽");
+      if (!p.deal_partners.length) miss.push("нет ни одной своей сделки");
     }
     return miss;
   };
@@ -1825,7 +1890,7 @@ if (typeof module !== 'undefined') module.exports = DATA;
 (function () {
   "use strict";
   var D = DATA, C = D.C;
-  var THIEF = G.THIEF, DETECTIVE = G.DETECTIVE, SPY = G.SPY, AFERIST = G.AFERIST, ACCOMPLICE = G.ACCOMPLICE;
+  var THIEF = G.THIEF, DETECTIVE = G.DETECTIVE, SPY = G.SPY, AFERIST = G.AFERIST, ACCOMPLICE = G.ACCOMPLICE, NOTARY = G.NOTARY;
   var SAVE_KEY = "ten.current", BACKUP_KEY = "ten.backup", NAMES_KEY = "ten.names";
   var PROMPT_EVERY = 70;
   var SITE_URL = "https://aipanov.github.io/ten/";   // shown in the single-file version
@@ -2293,7 +2358,7 @@ if (typeof module !== 'undefined') module.exports = DATA;
       var k = res[seller];
       if (k === null || k === undefined) { A.toast("Сделка отменена."); return; }
       var got = G.giveHint(st, seller, buyer, k);
-      var story = G.recordDeal(st, seller, buyer, price, "подсказку", null, true);
+      var story = G.recordDeal(st, seller, buyer, price, "подсказку", null, true, got.text);
       Sound.play("cash");
       A.push(new DealAnnounce(story, price));
       A.push(new PrivateScene("Подсказка от " + G.name(st, seller), [buyer], renderMessage("Купленная подсказка",
@@ -2356,7 +2421,7 @@ if (typeof module !== 'undefined') module.exports = DATA;
   function suspectBoard(i, title) {
     var st = A.st, p = st.players[i], th = G.thief(st);
     var cands = p.role !== THIEF ? G.candidates(st, i) : G.others(st, i);
-    var cols = Math.min(st.players.length, 5);
+    var cols = st.players.length === 6 ? 3 : Math.min(st.players.length, 5);   // six: two rows of three
     var cards = st.players.map(function (q, j) {
       if (j === i) return h("div", { class: "sus me" }, h("div", { class: "tag" }, "это ты"), fedora(44, "#46424e", "#9694a0"), h("div", { class: "nm" }, q.name));
       if (p.role === ACCOMPLICE && j === th)
@@ -2452,6 +2517,13 @@ if (typeof module !== 'undefined') module.exports = DATA;
       act = open.length ? h("div", { class: "grid2" }, open.map(function (k) {
         return btn("Заглянуть в " + (k + 1), function () { scene.data.msg = G.spyPeek(st, i, k); }, { kind: "accent" });
       })) : h("p", { class: "muted" }, "Все конверты уже проданы.");
+    } else if (p.role === NOTARY) {
+      var book = st.notary_book || [];
+      act = book.length ? h("div", { class: "stack" }, book.map(function (d, k) {
+        return btn("Сделка " + (k + 1) + ": " + G.name(st, d.seller) + " → " + G.name(st, d.buyer), function () {
+          scene.data.msg = "Продано: " + G.notaryPeek(st, i, k);
+        }, { kind: "accent", cls: "slim" });
+      })) : h("p", { class: "muted" }, "Сделок с гарантией пока не было. Сейчас их: 0 из " + R.NOTARY_DEALS + ".");
     } else if (p.role === AFERIST) {
       act = p.last_fine > 0 ? btn("Отменить штраф (" + money(Math.min(p.last_fine, C.AFERIST_CANCEL_MAX)) + ")", function () {
         var got = G.aferistCancel(st, i);
@@ -2590,7 +2662,7 @@ if (typeof module !== 'undefined') module.exports = DATA;
         h("div", { class: "hero" }, h("div", { class: "stolen" }, painting(150), h("div", { class: "stamp" }, "УКРАДЕНА")),
           fedora(110)),
         logo(),
-        h("p", { class: "muted" }, "семейная детективная игра на 3–5 игроков · от часа до полутора"),
+        h("p", { class: "muted" }, "семейная детективная игра на 3–6 игроков · от часа до полутора"),
         h("div", { class: "stack", style: "margin-top:18px" },
           btn("Новая игра", function () { self.newGame(); }, { kind: "accent huge" }),
           btn("Продолжить партию", function () { self.continueGame(); }, { kind: "big", disabled: !hasSave() }),
@@ -2630,6 +2702,7 @@ if (typeof module !== 'undefined') module.exports = DATA;
         3: ["3 игрока", "Вор, Детектив и Шпион или Аферист. Вор может подбросить фальшивую улику."],
         4: ["4 игрока", "Классика: Вор, Детектив, Шпион, Аферист."],
         5: ["5 игроков", "Плюс Сообщник — он знает вора и помогает ему."],
+        6: ["6 игроков", "Плюс тайный Нотариус — богатеет, когда люди не доверяют друг другу."],
       };
       var self = this, cards = [];
       for (var n = D.MIN_PLAYERS; n <= D.MAX_PLAYERS; n++) (function (n) {
@@ -3247,7 +3320,7 @@ if (typeof module !== 'undefined') module.exports = DATA;
       if (!this.show)
         return h("div", { class: "screen center" }, icon("scales", 80), h("h1", { style: "font-size:42px;margin-top:8px" }, "Подсчёт"), rule(),
           h("p", { style: "margin:10px 0 16px" }, "Сейчас откроются все роли. Банк выдаёт тайные бонусы ролей " +
-            "(детектив — за улики, аферист — комиссия за сделки, сообщник — доля из сейфа):"),
+            "(детектив — за улики, аферист — комиссия за сделки, сообщник — доля из сейфа, нотариус — плата за гарантии):"),
           h("div", { class: "card stack" }, this.bonusLines.map(function (l) { return h("p", { class: "big" }, l); })),
           h("div", { class: "spacer" }),
           btn("Раскрыть роли и итог", function () { self.show = true; Sound.play("fanfare"); A.scrollTop = true; }, { kind: "accent huge" }));
