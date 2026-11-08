@@ -55,7 +55,7 @@
   };
 
   // ---------- setup ----------
-  G.create = function (names, rng) {
+  G.create = function (names, rng, mode) {
     rng = rng || RNG;
     var roles = shuffle(rng, rolesFor(names.length, rng));
     var st = {
@@ -70,7 +70,7 @@
       court_done: false, thief_caught: false, court_verdict: "", trial_done: false, fragment_step: 0,
       final_paid: false, spot_ids: sample(rng, range(D.SPOTS.length), C.TOTAL_CLUES + 2),
       alibi_places: [], alibi_true: 0, alibi_known: {}, alibi_answers: {}, forgetful: null,
-      fake_armed: false, fake_given_to: null, timer_left: 0, log: [],
+      fake_armed: false, fake_given_to: null, timer_left: 0, mode: mode || C.DEFAULT_MODE, log: [],
     };
     G.makeAlibis(st, rng);
     G.note(st, "Новая партия: " + names.join(", "));
@@ -160,6 +160,12 @@
   G.thief = function (st) { return G.roleIndex(st, THIEF); };
   G.round = function (st) { return D.ROUNDS[Math.max(1, Math.min(st.round_index, D.MAX_ROUND))]; };
   G.others = function (st, i) { return range(st.players.length).filter(function (j) { return j !== i; }); };
+
+  // Length of the current round in the chosen mode (old saves have no mode → default).
+  G.minutes = function (st) {
+    var m = C.MODES[st.mode] || C.MODES[C.DEFAULT_MODE];
+    return m.minutes[Math.max(1, Math.min(st.round_index, D.MAX_ROUND)) - 1];
+  };
 
   G.plantFake = function (st, i) { st.players[i].ability_used = true; st.fake_armed = true; };
 
@@ -266,7 +272,7 @@
     st.current_event = null;
     st.event_applied = false;
     if (st.round_index <= D.MAX_ROUND) {
-      st.timer_left = G.round(st).minutes * 60;
+      st.timer_left = G.minutes(st) * 60;
       if (st.event_deck.length && st.round_index > 1) st.current_event = st.event_deck.shift();
       G.note(st, "— Раунд " + st.round_index + ". " + G.round(st).title + " —");
       if (st.current_event) G.note(st, "Событие: " + D.EVENTS[st.current_event][0]);
@@ -363,6 +369,33 @@
   };
 
   // ---------- deals ----------
+  // Hints from the seller's board that can be passed through the device.
+  // The thief's own pair is a decoy (it does not contain the thief), so it is not for sale.
+  G.sellableHints = function (st, seller, buyer) {
+    var s = st.players[seller];
+    var out = s.cleared.filter(function (x) { return x !== buyer; }).map(function (x) { return { kind: "clear", who: x }; });
+    if (s.role !== THIEF) out = out.concat(s.pairs.map(function (p) { return { kind: "pair", who: p.slice() }; }));
+    return out;
+  };
+  G.hintText = function (st, h) {
+    if (h.kind === "clear") return G.name(st, h.who) + " — не вор.";
+    return "вор — один из двух: " + G.name(st, h.who[0]) + " или " + G.name(st, h.who[1]) + ".";
+  };
+  // Copy hint k onto the buyer's board. Nothing goes to the public log: record_deal logs the deal.
+  G.giveHint = function (st, seller, buyer, k) {
+    var h = G.sellableHints(st, seller, buyer)[k], b = st.players[buyer], text = G.hintText(st, h), isNew;
+    if (h.kind === "clear") {
+      isNew = b.cleared.indexOf(h.who) < 0;
+      if (isNew) b.cleared.push(h.who);
+    } else {
+      var key = h.who.slice().sort().join(",");
+      isNew = !b.pairs.some(function (p) { return p.slice().sort().join(",") === key; });
+      if (isNew) b.pairs.push(h.who.slice());
+    }
+    if (isNew) b.hints.push("Сделка (" + G.name(st, seller) + "): " + text);
+    return { text: text, isNew: isNew };
+  };
+
   G.recordDeal = function (st, seller, buyer, price, item, digitPos) {
     var s = st.players[seller], b = st.players[buyer];
     item = item || "что-то";

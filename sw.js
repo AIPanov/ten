@@ -1,6 +1,6 @@
 // Offline cache: the game works without internet after the first open.
 // VERSION is stamped by tools/build_web.py from a hash of the files: every update gets a new cache.
-var VERSION = "ten-945da7d9fc";
+var VERSION = "ten-789558f34d";
 var FILES = ["./", "index.html", "style.css", "data.js", "game.js", "sound.js", "app.js", "mona_lisa.jpg",
   "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png"];
 

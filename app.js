@@ -338,7 +338,7 @@
     o = o || {};
     this.mode = mode; this.onOk = onOk; this.lot = o.lot || 0; this.sub = "bank_pay";
     this.a = null; this.b = null; this.amount = mode === "auction" ? C.AUCTION_START : 0;
-    this.item = o.item || D.DEAL_ITEMS[0]; this.honest = false; this.pos = null;
+    this.item = o.item || D.DEAL_ITEMS[0]; this.honest = false; this.pos = null; this.viaPhone = true;
   }, {
     modal: true,
     needsB: function () { return ["deal", "contract", "duel"].indexOf(this.mode) >= 0 || (this.mode === "money" && this.sub === "transfer"); },
@@ -354,6 +354,7 @@
       return this.a;
     },
     digitDeal: function () { return this.mode === "deal" && this.item === "цифру кода"; },
+    hintDeal: function () { return this.mode === "deal" && this.item === "подсказку"; },
     valid: function () {
       var st = A.st;
       if (this.a === null) return false;
@@ -376,6 +377,8 @@
         else if (this.sub === "pay_bank") { G.payBank(st, a, amt, "", true); msg = G.name(st, a) + " отдаёт в банк " + money(amt) + "."; }
         else { G.transfer(st, a, b, amt); msg = G.name(st, a) + " → " + G.name(st, b) + ": " + money(amt); }
         A.toast(msg);
+      } else if (this.mode === "deal" && this.hintDeal() && this.viaPhone) {
+        sellHint(a, b, amt);
       } else if (this.mode === "deal") {
         var pos = this.digitDeal() && this.honest ? this.pos : null;
         var story = G.recordDeal(st, a, b, amt, this.item, pos);
@@ -424,6 +427,12 @@
               return btn("цифра №" + pos, function () { self.pos = pos; }, { kind: self.pos === pos ? "selected" : "", cls: "slim" });
             }));
           })() : h("p", { class: "muted small", style: "margin-top:6px" }, "Без галочки цифру говорят вслух — можно соврать.")) : null,
+        this.hintDeal() ? h("div", { style: "margin-top:12px" },
+          btn((this.viaPhone ? "☑ " : "☐ ") + "Передать через телефон", function () { self.viaPhone = !self.viaPhone; },
+            { kind: this.viaPhone ? "selected" : "", cls: "slim" }),
+          h("p", { class: "muted small", style: "margin-top:6px" }, this.viaPhone
+            ? "Продавец тайно выберет подсказку со своей доски — она навсегда появится на доске покупателя. Соврать нельзя."
+            : "Без галочки подсказку говорят на ухо — можно соврать, но на доску она не попадёт.")) : null,
         this.needsAmount() ? h("div", { style: "margin-top:14px" },
           h("div", { class: "muted small" }, { deal: "Цена (0 — без денег)", auction: "Его ставка" }[this.mode] || "Сумма"),
           h("div", { class: "amount" }, money(this.amount)),
@@ -436,6 +445,33 @@
           btn("Подтвердить", function () { self.ok(); }, { kind: "accent", disabled: !this.valid() })));
     },
   });
+
+  // Honest hint sale: the seller privately picks a hint from their board, then the buyer privately
+  // sees it land on their board. Money moves only after the seller has chosen (they may cancel).
+  function sellHint(seller, buyer, price) {
+    var st = A.st;
+    A.push(new PrivateScene("Продажа подсказки", [seller], function (scene, i) {
+      var hints = G.sellableHints(st, seller, buyer);
+      return [h("h2", null, "Какую подсказку отдаёшь?"),
+        h("p", { class: "muted", style: "margin:6px 0 12px" }, "Покупатель: " + G.name(st, buyer) +
+          ". Она появится на доске покупателя — такой, как у тебя."),
+        hints.length ? h("div", { class: "stack" }, hints.map(function (hn, k) {
+          return btn(G.hintText(st, hn), function () { scene.finish(k); }, { kind: "big" });
+        })) : h("p", { class: "big" }, "На твоей доске пока нечего передать. Отмени сделку — или продай что-то другое на словах."),
+        h("div", { style: "margin-top:16px" }, suspectBoard(i)),
+        bar(btn("Отменить сделку", function () { scene.finish(null); }, { kind: "ghost" }))];
+    }, function (res) {
+      var k = res[seller];
+      if (k === null || k === undefined) { A.toast("Сделка отменена."); return; }
+      var got = G.giveHint(st, seller, buyer, k);
+      var story = G.recordDeal(st, seller, buyer, price, "подсказку");
+      Sound.play("cash");
+      A.push(new DealAnnounce(story, price));
+      A.push(new PrivateScene("Подсказка от " + G.name(st, seller), [buyer], renderMessage("Купленная подсказка",
+        got.text + (got.isNew ? "\n\nЗаписана на твою доску навсегда." : "\n\nЭто у тебя уже было — доска не изменилась."), true),
+        null, false));
+    }));
+  }
 
   var DealAnnounce = inherit(function (story, amount) { this.story = story; this.amount = amount; }, {
     modal: true,
@@ -535,12 +571,15 @@
         h("ul", { class: "dots plan", style: "list-style:none;padding-left:0" }, role.plan.map(function (s, k) {
           return h("li", { class: k + 1 === st.round_index ? "cur" : "" }, G.fmt(s, R));
         }))) : null,
-      o.hints ? h("div", { class: "card" }, h("div", { class: "label" }, "Твои подсказки и цифры"),
-        (function () {
-          var lines = hintLines(p);
-          return lines.length ? h("ul", { class: "dots" }, lines.map(function (l) { return h("li", null, l); }))
-            : h("p", { class: "muted" }, "Пока нет.");
-        })()) : null);
+      o.hints ? hintsCard(p) : null);
+  }
+
+  // Everything the player has learned, stored in the game: survives reloads, nobody has to remember it.
+  function hintsCard(p) {
+    var lines = hintLines(p);
+    return h("div", { class: "card" }, h("div", { class: "label" }, "Твои улики и цифры — записаны навсегда"),
+      lines.length ? h("ul", { class: "dots" }, lines.map(function (l) { return h("li", null, l); }))
+        : h("p", { class: "muted" }, "Пока нет. Улики, конверты и сделки «через телефон» появятся здесь сами."));
   }
 
   function renderRole(scene, i) { return [roleCard(i, { plan: true, hints: false }), hideBar(scene)]; }
@@ -590,9 +629,10 @@
       }, { kind: "accent" }) : h("p", { class: "muted" }, "Штрафов пока не было — отменять нечего.");
     }
     return [
+      suspectBoard(i), h("div", { class: "spacer" }), hintsCard(p), h("div", { class: "spacer" }),
       h("div", { class: "card gold", style: "margin-bottom:12px" }, h("div", { class: "label" }, "Использовать способность"),
         h("div", { style: "margin-top:8px" }, act)),
-      suspectBoard(i), h("div", { class: "spacer" }), roleCard(i, { plan: true, hints: true }), hideBar(scene, "Скрыть"),
+      roleCard(i, { plan: true, hints: false }), hideBar(scene, "Скрыть"),
     ];
   }
 
@@ -720,7 +760,7 @@
         h("div", { class: "hero" }, h("div", { class: "stolen" }, painting(150), h("div", { class: "stamp" }, "УКРАДЕНА")),
           fedora(110)),
         logo(),
-        h("p", { class: "muted" }, "семейная детективная игра на 3–5 игроков · 70–80 минут"),
+        h("p", { class: "muted" }, "семейная детективная игра на 3–5 игроков · от часа до полутора"),
         h("div", { class: "stack", style: "margin-top:18px" },
           btn("Новая игра", function () { self.newGame(); }, { kind: "accent huge" }),
           btn("Продолжить партию", function () { self.continueGame(); }, { kind: "big", disabled: !hasSave() }),
@@ -735,29 +775,47 @@
     },
   });
 
-  var CountScene = inherit(function () {}, {
+  var MODE_KEY = "ten.mode";
+  var CountScene = inherit(function () {
+    var m = null;
+    try { m = localStorage.getItem(MODE_KEY); } catch (e) { /* ignore */ }
+    this.mode = C.MODES[m] ? m : C.DEFAULT_MODE;
+  }, {
     back: function () { A.pop(); },
+    modePicker: function () {
+      var self = this;
+      return h("div", { class: "card" }, h("div", { class: "label" }, "Сколько времени"),
+        h("div", { class: "grid2", style: "margin-top:8px" }, Object.keys(C.MODES).map(function (k) {
+          var m = C.MODES[k];
+          return btn(h("span", null, m.title, h("small", null, m.total)), function () {
+            self.mode = k;
+            try { localStorage.setItem(MODE_KEY, k); } catch (e) { /* ignore */ }
+          }, { kind: self.mode === k ? "selected" : "", cls: "col" });
+        })),
+        h("p", { class: "muted small", style: "margin-top:8px" }, C.MODES[this.mode].about + " Раунды: " +
+          C.MODES[this.mode].minutes.join(" · ") + " мин."));
+    },
     render: function () {
       var info = {
         3: ["3 игрока", "Вор, Детектив и Шпион или Аферист. Вор может подбросить фальшивую улику."],
         4: ["4 игрока", "Классика: Вор, Детектив, Шпион, Аферист."],
         5: ["5 игроков", "Плюс Сообщник — он знает вора и помогает ему."],
       };
-      var cards = [];
+      var self = this, cards = [];
       for (var n = D.MIN_PLAYERS; n <= D.MAX_PLAYERS; n++) (function (n) {
         cards.push(h("div", { class: "card warm deco", style: "display:flex;gap:14px;align-items:center" },
           h("div", { style: "font-size:64px;font-weight:900;color:var(--gold);line-height:1;width:52px;text-align:center" }, n),
           h("div", { style: "flex:1" }, h("h3", null, info[n][0]), h("p", { class: "muted small", style: "margin:2px 0 8px" }, info[n][1]),
-            btn("Нас " + n, function () { A.pop(); A.push(new SetupScene(n)); }, { kind: "accent" }))));
+            btn("Нас " + n, function () { A.pop(); A.push(new SetupScene(n, self.mode)); }, { kind: "accent" }))));
       })(n);
       return h("div", { class: "screen" }, h("h1", { class: "center" }, "Сколько вас?"), rule(),
-        h("div", { class: "stack" }, cards), h("div", { class: "spacer" }),
+        h("div", { class: "stack" }, this.modePicker(), cards), h("div", { class: "spacer" }),
         btn("Назад", function () { A.pop(); }, { kind: "ghost" }));
     },
   });
 
-  var SetupScene = inherit(function (count) {
-    this.count = count;
+  var SetupScene = inherit(function (count, mode) {
+    this.count = count; this.mode = mode;
     var saved = [];
     try { saved = JSON.parse(localStorage.getItem(NAMES_KEY) || "[]"); } catch (e) { saved = []; }
     this.names = G.range(D.MAX_PLAYERS).map(function (k) { return saved[k] || ""; });
@@ -769,7 +827,7 @@
       var low = names.map(function (n) { return n.toLowerCase(); });
       if (new Set(low).size < names.length) { this.error = "Имена должны быть разными."; return; }
       try { localStorage.setItem(NAMES_KEY, JSON.stringify(this.names)); } catch (e) { /* ignore */ }
-      A.st = G.create(names);
+      A.st = G.create(names, undefined, this.mode);
       A.save();
       A.reset(new PrepScene());
     },
@@ -879,7 +937,7 @@
         body = [h("div", { class: "row", style: "align-items:center" }, h("div", { style: "flex:none" }, icon("mask", 46)), h("h1", null, "Раздача ролей")),
           h("p", { style: "margin:10px 0" }, "Телефон по очереди обойдёт всех. Каждый тайно увидит свою роль, миссию и ПЛАН ПО РАУНДАМ — что " +
             "делать, чтобы выиграть. Прочитай план внимательно: это твоя инструкция на всю игру. Свою роль, план и подсказки " +
-            "можно открыть снова в любой момент — кнопка «Моя роль»."),
+            "можно открыть снова в любой момент — кнопка «Мои улики»."),
           h("div", { class: "card" }, D.ROLE_ORDER.filter(function (r) { return G.hasRole(st, r); }).map(function (r) {
             return h("p", { class: "small", style: "margin:4px 0" }, h("b", { class: "gold" }, D.ROLES[r].name + ": "), D.ROLES[r].intro);
           })),
@@ -913,7 +971,7 @@
           h("div", { class: "remind" }, D.ROLE_ORDER.filter(function (r) { return G.hasRole(st, r); }).map(function (r) {
             return [h("b", null, cap(D.ROLES[r].name) + ":"), h("span", null, rnd.remind[r])];
           })),
-          h("p", { class: "muted small", style: "margin-top:12px" }, "На раунд: " + rnd.minutes + " минут. Таймер запустится сам.")),
+          h("p", { class: "muted small", style: "margin-top:12px" }, "На раунд: " + G.minutes(A.st) + " минут. Таймер запустится сам.")),
         bar(btn("Начать раунд", function () { A.pop(); self.hub.afterIntro(); }, { kind: "accent big" })));
     },
   });
@@ -1004,7 +1062,7 @@
       if (!this.flags.started) {
         this.flags.started = true;
         this.running = true;
-        A.toast("Раунд начался! " + G.round(A.st).minutes + " минут.");
+        A.toast("Раунд начался! " + G.minutes(A.st) + " минут.");
       }
     },
     newPrompt: function (sound) {
@@ -1022,7 +1080,7 @@
         if (this.promptT > PROMPT_EVERY) this.newPrompt();
       }
       if (!this.running) { Sound.stopLoop(); return; }
-      var total = G.round(st).minutes * 60;
+      var total = G.minutes(st) * 60;
       st.timer_left = Math.max(0, st.timer_left - dt);
       var left = st.timer_left, sec = Math.ceil(left);
       if (left <= 30 && left > 0) Sound.startLoop("tension");
@@ -1125,8 +1183,8 @@
     },
     openSafe: function () { A.push(new SafeScene()); },
     myRole: function () {
-      A.push(new PickDialog("Кто смотрит свою роль?", A.st.players.map(function (p, i) { return [p.name, i]; }), function (i) {
-        A.push(new PrivateScene("Моя роль", [i], renderAbility));
+      A.push(new PickDialog("Кто смотрит свои улики и роль?", A.st.players.map(function (p, i) { return [p.name, i]; }), function (i) {
+        A.push(new PrivateScene("Мои улики", [i], renderAbility));
       }));
     },
     duel: function () {
@@ -1172,14 +1230,14 @@
         h("div", { class: "timer-ctl" },
           btn(this.running ? "Пауза" : "Продолжить", function () { self.running = !self.running; }, { kind: this.running ? "" : "accent" }),
           btn("+1 мин", function () { st.timer_left += 60; self.rang = false; }),
-          btn("Сброс", function () { st.timer_left = rnd.minutes * 60; self.running = false; self.rang = false; })));
+          btn("Сброс", function () { st.timer_left = G.minutes(st) * 60; self.running = false; self.rang = false; })));
       var host = h("div", { class: "card warm host" }, fedora(40),
         h("div", { class: "txt" }, h("div", { class: "label" }, "Ведущий"), h("b", { id: "host-prompt" }, this.prompt)),
         btn("Другое", function () { self.newPrompt(); }, { cls: "slim" }));
       var why = h("details", { class: "card why" }, h("summary", null, h("span", { class: "label" }, "Зачем этот раунд и что делать")),
         h("p", { style: "margin-top:8px" }, G.fmt(rnd.why, R)),
         h("ol", { class: "list muted small", style: "margin-top:6px" }, rnd.steps.map(function (s) { return h("li", null, s); })));
-      if (!this.flags.whyClosed && st.round_index === 1) why.open = true;
+      if (!this.flags.whyClosed && (st.round_index === 1 || st.mode === "first")) why.open = true;
       return h("div", { class: "screen with-bar" }, top,
         h("div", { class: "stack" },
           host,
@@ -1190,7 +1248,7 @@
           this.players()),
         bar(btn("Деньги", function () { A.push(new TxDialog("money")); }, { cls: "slim" }),
           btn("Сделка", function () { A.push(new TxDialog("deal")); }, { cls: "slim" }),
-          btn("Моя роль", function () { self.myRole(); }, { cls: "slim" }),
+          btn("Мои улики", function () { self.myRole(); }, { cls: "slim" }),
           btn("Ещё", function () { A.push(new MoreDialog(self)); }, { cls: "slim" }),
           btn("Дальше »", function () { self.nextRound(); }, { kind: "accent", cls: "slim grow" })));
     },
@@ -1236,7 +1294,7 @@
             "цифра кода). Колода из 30 конвертов — каждый раз новые.")], { icon: "envelope" }),
         btn("Продано! Кто купил конверт " + (k + 1) + "?", function () { self.sellLot(k); }, { kind: "accent big" }),
         btn("Никто не купил", function () { G.skipLot(st, k); }, { kind: "ghost", cls: "slim" }),
-        k === 0 ? h("p", { class: "muted small" }, "Шпион может заглянуть в конверт до торгов: «Моя роль».") : null);
+        k === 0 ? h("p", { class: "muted small" }, "Шпион может заглянуть в конверт до торгов: «Мои улики».") : null);
     },
     area4: function () {
       var st = A.st, deals = st.log.filter(function (l) { return l.indexOf("Сделка: ") === 0; }).map(function (l) { return l.slice(8); });
