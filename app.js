@@ -338,7 +338,7 @@
     o = o || {};
     this.mode = mode; this.onOk = onOk; this.lot = o.lot || 0; this.sub = "bank_pay";
     this.a = null; this.b = null; this.amount = mode === "auction" ? C.AUCTION_START : 0;
-    this.item = o.item || D.DEAL_ITEMS[0]; this.honest = false; this.pos = null; this.viaPhone = true;
+    this.item = o.item || D.DEAL_ITEMS[0]; this.honest = false; this.pos = null; this.viaPhone = false;
   }, {
     modal: true,
     needsB: function () { return ["deal", "contract", "duel"].indexOf(this.mode) >= 0 || (this.mode === "money" && this.sub === "transfer"); },
@@ -355,6 +355,9 @@
     },
     digitDeal: function () { return this.mode === "deal" && this.item === "цифру кода"; },
     hintDeal: function () { return this.mode === "deal" && this.item === "подсказку"; },
+    // guaranteed deal: the notary (bank) takes a fee from the buyer on top of the price
+    guaranteed: function () { return (this.digitDeal() && this.honest) || (this.hintDeal() && this.viaPhone); },
+    total: function () { return this.amount + (this.guaranteed() ? C.NOTARY_FEE : 0); },
     valid: function () {
       var st = A.st;
       if (this.a === null) return false;
@@ -363,7 +366,7 @@
       if (this.mode === "money") return this.amount > 0 && (this.sub !== "transfer" || this.amount <= bal);
       if (this.mode === "deal") {
         if (this.digitDeal() && this.honest && this.pos === null) return false;
-        return this.amount <= bal;
+        return this.total() <= bal;
       }
       if (this.mode === "auction") return this.amount >= C.AUCTION_START && this.amount <= bal;
       return true;
@@ -381,7 +384,7 @@
         sellHint(a, b, amt);
       } else if (this.mode === "deal") {
         var pos = this.digitDeal() && this.honest ? this.pos : null;
-        var story = G.recordDeal(st, a, b, amt, this.item, pos);
+        var story = G.recordDeal(st, a, b, amt, this.item, pos, !!pos);
         Sound.play("cash");
         A.push(new DealAnnounce(story, amt));
         if (pos) {
@@ -418,7 +421,7 @@
         this.playerRow(lab[0], "a"),
         this.needsB() ? this.playerRow(lab[1], "b") : null,
         this.digitDeal() ? h("div", { style: "margin-top:12px" },
-          btn((this.honest ? "☑ " : "☐ ") + "Честно — через телефон", function () { self.honest = !self.honest; },
+          btn((this.honest ? "☑ " : "☐ ") + "Гарантия нотариуса: +" + money(C.NOTARY_FEE), function () { self.honest = !self.honest; },
             { kind: this.honest ? "selected" : "", cls: "slim" }),
           this.honest && this.a !== null ? (function () {
             var known = Object.keys(st.players[self.a].digits).sort();
@@ -426,20 +429,24 @@
             return h("div", { class: "chips", style: "margin-top:8px" }, known.map(function (pos) {
               return btn("цифра №" + pos, function () { self.pos = pos; }, { kind: self.pos === pos ? "selected" : "", cls: "slim" });
             }));
-          })() : h("p", { class: "muted small", style: "margin-top:6px" }, "Без галочки цифру говорят вслух — можно соврать.")) : null,
+          })() : h("p", { class: "muted small", style: "margin-top:6px" }, "Без гарантии цифру говорят на ухо — можно соврать. " +
+            "С гарантией телефон тайно передаст настоящую цифру; покупатель доплачивает " + money(C.NOTARY_FEE) + " в банк.")) : null,
         this.hintDeal() ? h("div", { style: "margin-top:12px" },
-          btn((this.viaPhone ? "☑ " : "☐ ") + "Передать через телефон", function () { self.viaPhone = !self.viaPhone; },
+          btn((this.viaPhone ? "☑ " : "☐ ") + "Гарантия нотариуса: +" + money(C.NOTARY_FEE), function () { self.viaPhone = !self.viaPhone; },
             { kind: this.viaPhone ? "selected" : "", cls: "slim" }),
           h("p", { class: "muted small", style: "margin-top:6px" }, this.viaPhone
-            ? "Продавец тайно выберет подсказку со своей доски — она навсегда появится на доске покупателя. Соврать нельзя."
-            : "Без галочки подсказку говорят на ухо — можно соврать, но на доску она не попадёт.")) : null,
+            ? "Продавец тайно выберет подсказку со своей доски — она навсегда появится на доске покупателя. Соврать нельзя. " +
+              "Покупатель доплачивает " + money(C.NOTARY_FEE) + " в банк."
+            : "Без гарантии подсказку шепчут на ухо — можно соврать, и на доску она не попадёт. Зато дешевле.")) : null,
         this.needsAmount() ? h("div", { style: "margin-top:14px" },
           h("div", { class: "muted small" }, { deal: "Цена (0 — без денег)", auction: "Его ставка" }[this.mode] || "Сумма"),
           h("div", { class: "amount" }, money(this.amount)),
           h("div", { class: "bills" }, C.BILLS.map(function (bill) {
             return btn("+" + bill, function () { self.amount += bill; });
           }), btn("Сброс", function () { self.amount = self.mode === "auction" ? C.AUCTION_START : 0; }, { kind: "ghost" })),
-          pay !== null && this.amount > st.players[pay].balance ? h("p", { class: "red small", style: "margin-top:6px" },
+          this.guaranteed() ? h("p", { class: "small", style: "margin-top:6px" }, "Покупатель платит: " + money(this.amount) +
+            " продавцу + " + money(C.NOTARY_FEE) + " нотариусу (в банк) = " + money(this.total())) : null,
+          pay !== null && this.total() > st.players[pay].balance ? h("p", { class: "red small", style: "margin-top:6px" },
             "Не хватает денег: " + G.name(st, pay)) : null) : null,
         h("div", { class: "actions" }, btn("Отмена", function () { A.pop(); }, { kind: "ghost" }),
           btn("Подтвердить", function () { self.ok(); }, { kind: "accent", disabled: !this.valid() })));
@@ -464,7 +471,7 @@
       var k = res[seller];
       if (k === null || k === undefined) { A.toast("Сделка отменена."); return; }
       var got = G.giveHint(st, seller, buyer, k);
-      var story = G.recordDeal(st, seller, buyer, price, "подсказку");
+      var story = G.recordDeal(st, seller, buyer, price, "подсказку", null, true);
       Sound.play("cash");
       A.push(new DealAnnounce(story, price));
       A.push(new PrivateScene("Подсказка от " + G.name(st, seller), [buyer], renderMessage("Купленная подсказка",
@@ -478,7 +485,8 @@
     render: function () {
       return h("div", { class: "center stack" }, icon("handshake", 80), h("h1", null, "СДЕЛКА!"),
         h("p", { class: "big" }, this.story + "."),
-        this.amount ? h("p", { class: "muted" }, "Передайте купюры из рук в руки.") : null,
+        this.amount || this.story.indexOf("нотариус") >= 0 ? h("p", { class: "muted" }, "Передайте купюры из рук в руки." +
+          (this.story.indexOf("нотариус") >= 0 ? " Плату нотариусу — в банк." : "")) : null,
         btn("Отлично", function () { A.pop(); }, { kind: "accent big" }));
     },
   });

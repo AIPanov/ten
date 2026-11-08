@@ -396,7 +396,7 @@
     return { text: text, isNew: isNew };
   };
 
-  G.recordDeal = function (st, seller, buyer, price, item, digitPos) {
+  G.recordDeal = function (st, seller, buyer, price, item, digitPos, guaranteed) {
     var s = st.players[seller], b = st.players[buyer];
     item = item || "что-то";
     s.deal_partners.push(buyer);
@@ -404,6 +404,8 @@
     var paid = price > 0 ? G.transfer(st, buyer, seller, price) : 0;
     if (digitPos && digitPos in s.digits) b.digits[digitPos] = s.digits[digitPos];
     var story = s.name + " продаёт " + item + " → " + b.name + (paid ? ", " + paid + " ₽" : ", без денег");
+    // guaranteed: the notary (bank) certifies the deal, the buyer pays NOTARY_FEE to the bank
+    if (guaranteed) story += " + " + G.payBank(st, buyer, C.NOTARY_FEE, "(нотариус)") + " ₽ нотариусу (гарантия)";
     G.note(st, "Сделка: " + story);
     [seller, buyer].forEach(function (i) {
       var p = st.players[i];
