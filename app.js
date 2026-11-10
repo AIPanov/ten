@@ -38,6 +38,7 @@
     if (o.disabled) b.disabled = true;
     b.onclick = function () {
       Sound.unlock();
+      if (window.Voice) Voice.unlock();
       Sound.play("click");
       if (fn) fn();
       A.save();
@@ -219,6 +220,7 @@
     this.title = title; this.total = seconds; this.names = names; this.note = note || "";
     this.idx = 0; this.left = seconds; this.running = true; this.lastTick = seconds;
     Sound.play("chime");
+    Voice.say(title + ". Начинает " + names[0] + ".");
   }, {
     modal: true,
     update: function (dt) {
@@ -233,9 +235,10 @@
     },
     nextPlayer: function () {
       this.idx += 1;
-      if (this.idx >= this.names.length) { this.running = false; Sound.play("timeup"); return; }
+      if (this.idx >= this.names.length) { this.running = false; Sound.play("timeup"); Voice.say("Все высказались."); return; }
       this.left = this.total;
       Sound.play("chime");
+      Voice.say("Следующий: " + this.names[this.idx] + ".");
     },
     render: function () {
       var self = this, done = this.idx >= this.names.length;
@@ -338,7 +341,7 @@
     o = o || {};
     this.mode = mode; this.onOk = onOk; this.lot = o.lot || 0; this.sub = "bank_pay";
     this.a = null; this.b = null; this.amount = mode === "auction" ? C.AUCTION_START : 0;
-    this.item = o.item || D.DEAL_ITEMS[0]; this.honest = false; this.pos = null; this.viaPhone = false;
+    this.item = o.item || D.DEAL_ITEMS[0]; this.honest = false; this.viaPhone = false;
   }, {
     modal: true,
     needsB: function () { return ["deal", "contract", "duel"].indexOf(this.mode) >= 0 || (this.mode === "money" && this.sub === "transfer"); },
@@ -365,7 +368,6 @@
       var pay = this.payer(), bal = pay !== null ? st.players[pay].balance : 1e9;
       if (this.mode === "money") return this.amount > 0 && (this.sub !== "transfer" || this.amount <= bal);
       if (this.mode === "deal") {
-        if (this.digitDeal() && this.honest && this.pos === null) return false;
         return this.total() <= bal;
       }
       if (this.mode === "auction") return this.amount >= C.AUCTION_START && this.amount <= bal;
@@ -377,21 +379,17 @@
       if (this.mode === "money") {
         var msg;
         if (this.sub === "bank_pay") { G.bankPay(st, a, amt); msg = "Банк → " + G.name(st, a) + ": " + money(amt); }
-        else if (this.sub === "pay_bank") { G.payBank(st, a, amt, "", true); msg = G.name(st, a) + " отдаёт в банк " + money(amt) + "."; }
+        else if (this.sub === "pay_bank") { G.payBank(st, a, amt, ""); msg = G.name(st, a) + " отдаёт в банк " + money(amt) + "."; }
         else { G.transfer(st, a, b, amt); msg = G.name(st, a) + " → " + G.name(st, b) + ": " + money(amt); }
         A.toast(msg);
       } else if (this.mode === "deal" && this.hintDeal() && this.viaPhone) {
         sellHint(a, b, amt);
+      } else if (this.mode === "deal" && this.digitDeal() && this.honest) {
+        sellDigit(a, b, amt);
       } else if (this.mode === "deal") {
-        var pos = this.digitDeal() && this.honest ? this.pos : null;
-        var story = G.recordDeal(st, a, b, amt, this.item, pos, !!pos);
+        var story = G.recordDeal(st, a, b, amt, this.item, null, false);
         Sound.play("cash");
         A.push(new DealAnnounce(story, amt));
-        if (pos) {
-          var d = st.players[b].digits[pos];
-          A.push(new PrivateScene("Честная цифра", [b], renderMessage("Цифра кода",
-            "Продавец: " + G.name(st, a) + ". Передано честно:\n\nЦифра №" + pos + " = " + d), null, false));
-        }
       } else if (this.mode === "auction") this.onOk(this.lot, a, amt);
       else if (this.onOk) this.onOk(a, b);
       A.save();
@@ -423,13 +421,10 @@
         this.digitDeal() ? h("div", { style: "margin-top:12px" },
           btn((this.honest ? "☑ " : "☐ ") + "Гарантия нотариуса: +" + money(C.NOTARY_FEE), function () { self.honest = !self.honest; },
             { kind: this.honest ? "selected" : "", cls: "slim" }),
-          this.honest && this.a !== null ? (function () {
-            var known = Object.keys(st.players[self.a].digits).sort();
-            if (!known.length) return h("p", { class: "red small", style: "margin-top:6px" }, "Продавец не знает ни одной цифры");
-            return h("div", { class: "chips", style: "margin-top:8px" }, known.map(function (pos) {
-              return btn("цифра №" + pos, function () { self.pos = pos; }, { kind: self.pos === pos ? "selected" : "", cls: "slim" });
-            }));
-          })() : h("p", { class: "muted small", style: "margin-top:6px" }, "Без гарантии цифру говорят на ухо — можно соврать. " +
+          h("p", { class: "muted small", style: "margin-top:6px" }, this.honest
+            ? "Продавец тайно выберет цифру, которую знает, — телефон передаст покупателю настоящую. Соврать нельзя. " +
+              "Покупатель доплачивает " + money(C.NOTARY_FEE) + " в банк."
+            : "Без гарантии цифру говорят на ухо — можно соврать. " +
             "С гарантией телефон тайно передаст настоящую цифру; покупатель доплачивает " + money(C.NOTARY_FEE) + " в банк.")) : null,
         this.hintDeal() ? h("div", { style: "margin-top:12px" },
           btn((this.viaPhone ? "☑ " : "☐ ") + "Гарантия нотариуса: +" + money(C.NOTARY_FEE), function () { self.viaPhone = !self.viaPhone; },
@@ -469,7 +464,7 @@
         bar(btn("Отменить сделку", function () { scene.finish(null); }, { kind: "ghost" }))];
     }, function (res) {
       var k = res[seller];
-      if (k === null || k === undefined) { A.toast("Сделка отменена."); return; }
+      if (k === null || k === undefined) { A.toast("Сделка не состоялась."); return; }
       var got = G.giveHint(st, seller, buyer, k);
       var story = G.recordDeal(st, seller, buyer, price, "подсказку", null, true, got.text);
       Sound.play("cash");
@@ -480,7 +475,30 @@
     }));
   }
 
-  var DealAnnounce = inherit(function (story, amount) { this.story = story; this.amount = amount; }, {
+  // Honest digit sale: which digits the seller knows is secret, so the choice is made on their private screen.
+  function sellDigit(seller, buyer, price) {
+    var st = A.st;
+    A.push(new PrivateScene("Продажа цифры кода", [seller], function (scene, i) {
+      var known = Object.keys(st.players[seller].digits).sort();
+      return [h("h2", null, "Какую цифру отдаёшь?"),
+        h("p", { class: "muted", style: "margin:6px 0 12px" }, "Покупатель: " + G.name(st, buyer) +
+          ". Телефон передаст настоящую цифру — соврать нельзя."),
+        known.length ? h("div", { class: "stack" }, known.map(function (pos) {
+          return btn("Цифра №" + pos + " = " + st.players[seller].digits[pos], function () { scene.finish(pos); }, { kind: "big" });
+        })) : h("p", { class: "big" }, "Ты пока не знаешь ни одной цифры. Отмени сделку — или продай что-то другое на словах."),
+        bar(btn("Отменить сделку", function () { scene.finish(null); }, { kind: "ghost" }))];
+    }, function (res) {
+      var pos = res[seller];
+      if (pos === null || pos === undefined) { A.toast("Сделка не состоялась."); return; }
+      var story = G.recordDeal(st, seller, buyer, price, "цифру кода", pos, true);
+      Sound.play("cash");
+      A.push(new DealAnnounce(story, price));
+      A.push(new PrivateScene("Цифра от " + G.name(st, seller), [buyer], renderMessage("Цифра кода",
+        "Передано честно:\n\nЦифра №" + pos + " = " + st.players[buyer].digits[pos]), null, false));
+    }));
+  }
+
+  var DealAnnounce = inherit(function (story, amount) { this.story = story; this.amount = amount; Voice.say("Сделка! " + story); }, {
     modal: true,
     render: function () {
       return h("div", { class: "center stack" }, icon("handshake", 80), h("h1", null, "СДЕЛКА!"),
@@ -513,6 +531,10 @@
     },
     render: function () {
       var self = this, i = this.current(), name = G.name(A.st, i);
+      if (this.phase === "pass" && this.spoken !== this.idx) {   // the name is public; the screen behind it is not
+        this.spoken = this.idx;
+        Voice.say("Передайте телефон: " + name + ". Остальные — отвернитесь.");
+      }
       if (this.phase === "pass") {
         return h("div", { class: "screen" }, h("div", { class: "pass" },
           fedora(140), h("p", { class: "muted" }, this.title),
@@ -574,7 +596,7 @@
       h("div", { class: "card warm" }, h("div", { class: "label" }, "Твоя миссия (+2000 ₽ в конце)"),
         h("ul", { class: "dots" }, role.goals.map(function (g) { return h("li", null, G.fmt(g, R)); }))),
       h("div", { class: "card" }, h("div", { class: "label" }, "Способность"), h("p", null, ability),
-        showSecret ? h("p", { class: "green", style: "margin-top:6px" }, role.secret) : null),
+        showSecret ? h("p", { class: "green", style: "margin-top:6px" }, G.fmt(role.secret, R)) : null),
       o.plan ? h("div", { class: "card" }, h("div", { class: "label" }, "Твой план по раундам"),
         h("ul", { class: "dots plan", style: "list-style:none;padding-left:0" }, role.plan.map(function (s, k) {
           return h("li", { class: k + 1 === st.round_index ? "cur" : "" }, G.fmt(s, R));
@@ -609,6 +631,42 @@
     };
   }
 
+  // Court «who is who»: name the thief (required), then optionally a role for each of the others.
+  // Same screen for everyone, so how long someone holds the phone tells nothing.
+  function renderCourt(scene, i) {
+    var st = A.st, d = scene.data, R = rules();
+    if (!d.roles) d.roles = {};
+    var roleNames = G.guessableRoles(st, i);
+    var cleared = st.players[i].role === THIEF ? [] : st.players[i].cleared;   // proven «not the thief» on own board
+    var out = [h("h2", null, "1. Кто вор?"),
+      h("p", { class: "muted small", style: "margin:4px 0 10px" }, "Голос за вора решает деньги суда. Изменить нельзя. Если вор — ты, назови кого угодно."),
+      h("div", { class: "chips" }, G.others(st, i).map(function (j) {
+        var out = cleared.indexOf(j) >= 0;
+        return btn(out ? h("span", null, G.name(st, j), h("small", null, "на доске: не вор")) : G.name(st, j),
+          function () { d.vote = j; delete d.roles[j]; }, { kind: d.vote === j ? "selected" : (out ? "ghost" : ""), cls: "col" });
+      }))];
+    if (d.vote !== undefined) {
+      out.push(h("h2", { style: "margin-top:18px" }, "2. Кто есть кто?"),
+        h("p", { class: "muted small", style: "margin:4px 0 10px" }, "По желанию. За каждую верную роль +" + money(C.GUESS_REWARD) +
+          " — тайно, при подсчёте. Чью роль угадают " + R.EXPOSE_TXT + ", тот проваливает миссию. Не знаешь — оставь «?»."));
+      G.others(st, i).filter(function (j) { return j !== d.vote; }).forEach(function (j) {
+        out.push(h("div", { style: "margin-top:8px" }, h("div", { class: "label" }, G.name(st, j)),
+          h("div", { class: "chips tight" }, [null].concat(roleNames).map(function (r) {
+            var on = (d.roles[j] || null) === r;
+            return btn(r ? cap(D.ROLES[r].name) : "?", function () {
+              Object.keys(d.roles).forEach(function (k) { if (d.roles[k] === r) delete d.roles[k]; });   // one role — one person
+              if (r) d.roles[j] = r; else delete d.roles[j];
+            },
+              { kind: on ? (r ? "selected" : "q") : "", cls: "slim" });
+          }))));
+      });
+    }
+    out.push(h("div", { style: "margin-top:16px;margin-bottom:40px" }, suspectBoard(i)),
+      bar(btn("Готово", function () { scene.finish({ vote: d.vote, roles: d.roles }); },
+        { kind: "accent big", disabled: d.vote === undefined })));
+    return out;
+  }
+
   function renderAbility(scene, i) {
     var st = A.st, p = st.players[i], msg = scene.data.msg, R = rules(), act;
     if (msg) act = h("p", { class: "big" }, msg);
@@ -618,11 +676,9 @@
         G.plantFake(st, i);
         scene.data.msg = "Фальшивка подброшена. Следующая подсказка другому игроку назовёт тебя невиновным.";
       }, { kind: "accent" });
-    else if (p.role === THIEF) act = h("p", null, "На общем экране: «Ещё» → «Дуэль». Ты — тот, кто вызывает.");
+    else if (p.role === THIEF) act = h("p", null, "На общем экране: «Ещё» → «Дуэль». Ты — тот, кто вызывает; право на дуэль телефон проверит тайно.");
     else if (p.role === ACCOMPLICE)
-      act = btn("Подсмотреть цифру кода", function () {
-        scene.data.msg = G.accomplicePeek(st, i) + ". Продай её вору — или кому выгоднее.";
-      }, { kind: "accent" });
+      act = h("p", null, "Сработает сама: в начале раунда 5 «Тайная почта» отправит вору цифру кода, которой у него нет. Он не узнает, что это ты.");
     else if (p.role === DETECTIVE)
       act = btn("Получить подсказку", function () { scene.data.msg = "Подсказка: " + G.detectiveHint(st, i); }, { kind: "accent" });
     else if (p.role === SPY) {
@@ -640,7 +696,7 @@
     } else if (p.role === AFERIST) {
       act = p.last_fine > 0 ? btn("Отменить штраф (" + money(Math.min(p.last_fine, C.AFERIST_CANCEL_MAX)) + ")", function () {
         var got = G.aferistCancel(st, i);
-        scene.data.msg = "Штраф отменён: возьми у банка " + money(got) + ".";
+        scene.data.msg = "Штраф отменён: банк тайно вернёт тебе " + money(got) + " при подсчёте. Никому ни слова.";
       }, { kind: "accent" }) : h("p", { class: "muted" }, "Штрафов пока не было — отменять нечего.");
     }
     return [
@@ -678,7 +734,7 @@
         add(el, [h("h1", { class: "center" }, "СЕЙФ"), safeArt(),
           h("h2", null, "Кто пробует вскрыть?"),
           h("p", { class: "muted", style: "margin:6px 0 12px" }, "У каждого одна попытка за игру. Код из 3 цифр (1–9). " +
-            "Ошибка — сигнализация, и все узнают, что ты пытался."),
+            "Ошибка — сигнализация: штраф " + money(C.SAFE_FINE) + ", и все узнают, что ты пытался."),
           h("div", { class: "stack" }, st.players.map(function (p, k) {
             return btn(p.name + (p.safe_tried ? " (попытка потрачена)" : ""), function () { self.who = k; self.phase = "pass"; },
               { kind: "accent big", disabled: p.safe_tried || st.safe_opened_by !== null });
@@ -704,7 +760,7 @@
             btn("Стереть", function () { self.code.pop(); }, { kind: "ghost" }),
             btn("ВСКРЫТЬ", function () { self.submit(); }, { kind: "danger big", disabled: this.code.length !== C.CODE_LEN })),
           h("div", { class: "spacer" }),
-          btn("Передумал", function () { self.phase = "pick"; self.code = []; }, { kind: "ghost" })]);
+          btn("Назад", function () { self.phase = "pick"; self.code = []; }, { kind: "ghost" })]);
       } else if (this.phase === "spin") {
         add(el, h("div", { class: "pass" }, safeArt("spin"), h("h2", null, G.name(st, this.who) + " вскрывает сейф…"),
           h("div", { class: "amount" }, "✱ ✱ ✱")));
@@ -715,7 +771,7 @@
           btn("Отлично", function () { A.pop(); }, { kind: "accent big" })));
       } else {
         add(el, [h("div", { class: "flash-red" }), h("div", { class: "pass" }, safeArt("alarm"), h("h1", { class: "red" }, "ТРЕВОГА!"),
-          h("p", { class: "big" }, "Код неверный. " + G.name(st, this.who) + " потратил(а) свою попытку. Все слышали сигнализацию…"),
+          h("p", { class: "big" }, "Код неверный. " + G.name(st, this.who) + ": попытка потрачена, штраф " + money(C.SAFE_FINE) + " в банк. Все слышали сигнализацию…"),
           btn("Понятно", function () { A.pop(); }, { kind: "accent big" }))]);
       }
       return el;
@@ -781,7 +837,12 @@
           btn("Продолжить партию", function () { self.continueGame(); }, { kind: "big", disabled: !hasSave() }),
           h("div", { class: "grid2" },
             btn("Как играть", function () { A.push(new RulesDialog()); }),
-            btn(Sound.muted ? "Звук: выкл" : "Звук: вкл", function () { Sound.toggle(); })),
+            btn("Правила с картинками", openRules)),
+          h("div", { class: "grid2" },
+            btn(Sound.muted ? "Звук: выкл" : "Звук: вкл", function () { Sound.toggle(); }),
+            Voice.available ? btn(Voice.on ? "Голос ведущего: вкл" : "Голос ведущего: выкл", function () {
+              if (Voice.toggle()) Voice.say("Голос ведущего включён.");
+            }) : null),
           isStandalone() ? null : btn(window.SINGLE_FILE ? "Как установить" : "Установить на телефон", installHelp, { kind: "ghost" }),
           window.SINGLE_FILE || !/^https?:/.test(location.protocol) ? null : h("div", { class: "grid2" },
             btn("Поделиться ссылкой", shareLink, { kind: "ghost", cls: "slim" }),
@@ -789,6 +850,12 @@
         h("p", { class: "muted small", style: "margin-top:18px" }, "Положите телефон в центр стола. Тайное смотрим по очереди."));
     },
   });
+
+  // Full rules with screenshots: a separate page (the game is saved, «← В игру» comes back to it).
+  function openRules() {
+    A.save();
+    location.href = window.SINGLE_FILE || !/^https?:/.test(location.protocol) ? "https://aipanov.github.io/ten/rules.html" : "rules.html";
+  }
 
   var MODE_KEY = "ten.mode";
   var CountScene = inherit(function () {
@@ -915,14 +982,14 @@
         body = [h("div", { class: "center" }, painting(190)), h("h1", { style: "margin-top:14px" }, "Пролог"),
           h("p", { class: "muted small" }, "Прочитайте вслух всем:"),
           h("p", { class: "big", style: "font-weight:600;margin:8px 0 12px" }, "«" + D.STORY + "»"),
-          h("p", { class: "muted" }, "Деньги «Монополии» — это ваши деньги в игре. В конце побеждает самый богатый. Как именно — на следующем экране.")];
+          h("p", { class: "muted" }, "Для антуража возьмите живые деньги: любые игровые купюры из настольных игр или фишки для покера. Это ваши деньги в игре. В конце побеждает самый богатый. Как именно — на следующем экране.")];
         next[0] = "Дальше: как играть";
       } else if (this.step === 1) {
         body = [h("p", { class: "muted small" }, "Прочитайте вслух всем:"), howToWin()];
         next[0] = "Понятно, дальше";
       } else if (this.step === 2) {
         body = [h("div", { class: "row", style: "align-items:center;flex:none" }, h("div", { style: "flex:none" }, icon("coin", 46)), h("h1", null, "Банк и сейф")),
-          h("p", { style: "margin:10px 0 14px" }, "Один из игроков держит кассу — все деньги «Монополии». Он такой же игрок, просто " +
+          h("p", { style: "margin:10px 0 14px" }, "Один из игроков держит кассу — все игровые деньги. Он такой же игрок, просто " +
             "выдаёт и принимает купюры. Телефон скажет, кому и сколько."),
           h("ol", { class: "list" }, [
             "Каждому игроку выдайте 1500 ₽: две по 500, четыре по 100 и две по 50.",
@@ -972,7 +1039,11 @@
   });
 
   // ===================================================================== round intro & events
-  var IntroScene = inherit(function (hub) { this.hub = hub; Sound.play("sting"); }, {
+  var IntroScene = inherit(function (hub) {
+    this.hub = hub; Sound.play("sting");
+    var st = A.st, rnd = G.round(st);
+    Voice.say("Раунд " + st.round_index + ". " + rnd.title + ". " + G.fmt(rnd.speech, rules()));
+  }, {
     render: function () {
       var self = this, st = A.st, rnd = G.round(st), R = rules();
       return h("div", { class: "screen with-bar intro" },
@@ -997,6 +1068,8 @@
     this.hub = hub; this.result = "";
     if (auto !== false && !st.event_applied && D.AUTO_EVENTS.indexOf(st.current_event) >= 0) this.applyAuto();
     this.pendingTimer = auto !== false && D.TIMER_EVENTS.indexOf(st.current_event) >= 0 && !st.event_applied;
+    var e = D.EVENTS[st.current_event];
+    if (e && auto !== false) Voice.say("Событие раунда: " + e[0] + ". " + e[1]);
   }, {
     modal: true,
     back: function () { if (!(D.DICE_EVENTS.indexOf(A.st.current_event) >= 0 && !A.st.event_applied)) this.close(); },
@@ -1051,11 +1124,11 @@
         });
       }
       return h("div", { class: "stack" },
-        h("p", { class: "label" }, "Событие раунда — случайная карточка, как «Шанс» в Монополии"),
+        h("p", { class: "label" }, "Событие раунда — случайная карточка-сюрприз"),
         h("h1", { style: "color:var(--text)" }, e[0]), h("p", { class: "big", style: "font-weight:500" }, e[1]),
         this.result ? h("p", { class: "gold big" }, this.result) : null,
         action,
-        btn(must ? "Сначала бросьте" : "К раунду", function () { self.close(); }, { kind: must ? "" : "accent big", disabled: must }));
+        btn(must ? "Сначала бросьте" : "К раунду", function () { self.close(); }, { kind: must || (action && !st.event_applied) ? "big" : "accent big", disabled: must }));
     },
   });
 
@@ -1085,7 +1158,7 @@
       var st = A.st, ab = G.sample(null, G.range(st.players.length), 2);
       this.prompt = G.fmt(G.choice(null, G.round(st).prompts), { a: G.name(st, ab[0]), b: G.name(st, ab[1]) });
       this.promptT = 0;
-      if (sound !== false) Sound.play("chime");
+      if (sound !== false) { Sound.play("chime"); Voice.say(this.prompt, true); }
       var el = document.getElementById("host-prompt");
       if (el) el.textContent = this.prompt;
     },
@@ -1095,7 +1168,7 @@
         this.promptT += dt;
         if (this.promptT > PROMPT_EVERY) this.newPrompt();
       }
-      if (!this.running) { Sound.stopLoop(); return; }
+      if (!this.running || (A.top() && A.top().pausesTimer)) { Sound.stopLoop(); return; }
       var total = G.minutes(st) * 60;
       st.timer_left = Math.max(0, st.timer_left - dt);
       var left = st.timer_left, sec = Math.ceil(left);
@@ -1108,6 +1181,7 @@
         this.rang = true; this.running = false;
         Sound.stopLoop(); Sound.play("timeup");
         A.toast("Время вышло! Доделайте шаг и жмите «Дальше»", "red", 8);
+        Voice.say("Время вышло! Доделайте шаг и жмите дальше.");
         renderSoon();
       }
       this.drawTimer();
@@ -1144,7 +1218,7 @@
     },
     suspects: function () {
       A.push(new PrivateScene("Тайное подозрение", G.range(A.st.players.length),
-        renderPick("Кого ты подозреваешь?", "Угадаешь вора — получишь 300 ₽ на суде. Если ты вор — выбери кого угодно."),
+        renderPick("Кого ты подозреваешь?", "Угадаешь вора — получишь 300 ₽ тайно при подсчёте. Если ты вор — выбери кого угодно."),
         function (res) { G.setSuspects(A.st, res); A.toast("Подозрения записаны. Жмите «Дальше»"); }));
     },
     speeches: function () {
@@ -1152,15 +1226,16 @@
       A.push(new TurnTimer("Речи на суде", 30, A.st.players.map(function (p) { return p.name; }), "Кого обвиняешь и почему? Или защищайся."));
     },
     court: function () {
-      A.push(new PrivateScene("Суд: тайное голосование", G.range(A.st.players.length),
-        renderPick("Кто вор?", "Голос нельзя изменить. Ниже — твоя доска."), function (res) {
-          var st = A.st;
-          G.setVotes(st, res);
-          var lines = Object.keys(res).map(function (i) { return G.name(st, +i) + " считает вором: " + G.name(st, res[i]); }).join("\n");
-          Sound.play("sting");
-          A.push(new MessageDialog("Голоса открыты", lines + "\n\n" + st.court_verdict +
-            "\n\nПередайте деньги купюрами. Дальше — подсчёт и раскрытие ролей.", null, "scales"));
-        }));
+      var court = new PrivateScene("Суд: кто есть кто", G.range(A.st.players.length), renderCourt, function (res) {
+        var st = A.st, votes = {}, roles = {};
+        Object.keys(res).forEach(function (i) { votes[i] = res[i].vote; roles[i] = res[i].roles; });
+        G.setGuesses(st, votes, roles);
+        Sound.play("sting");
+        A.push(new MessageDialog("Голоса записаны", "Кого назвали вором, кто угадал роли и кто кому платит — всё откроется " +
+          "при подсчёте. До него никто не знает, кто победил.", null, "scales"));
+      });
+      court.pausesTimer = true;   // the secret round takes ~5 minutes: the round clock waits
+      A.push(court);
     },
 
     // ---- round 2 & 5: riddles
@@ -1188,6 +1263,14 @@
         A.push(new PrivateScene("Конверт " + (lot + 1), [winner], renderMessage(lines[0], body, true), null, false));
       }, { lot: k }));
     },
+    mail: function () {
+      var st = A.st, letters = G.sendMail(st);
+      A.save();
+      A.push(new PrivateScene("Тайная почта", G.range(st.players.length), function (scene, i) {
+        return [h("h2", null, "Твоя почта"), h("p", { class: "big", style: "margin:12px 0 18px" }, letters[i]),
+          btn("Прочитано", function () { scene.finish(true); }, { kind: "accent big" })];
+      }, function () { A.toast("Почта разослана. Дальше — испытание."); }, false));
+    },
     trial: function () {
       var st = A.st;
       A.push(new RollsDialog("Испытание: фрагмент №1", st.players.map(function (p, i) { return [i, p.name]; }), function (rolls) {
@@ -1205,27 +1288,41 @@
     },
     duel: function () {
       A.push(new TxDialog("duel", function (a, b) {
-        var st = A.st, p = st.players[a], card;
-        if (p.duel_cards > 0) card = true;
-        else if (p.role === THIEF && !p.ability_used && !rules().FAKE_HINT) card = false;
-        else { A.push(new MessageDialog("Дуэль невозможна", p.name + ": нет карты «Дуэль» и нет права на дуэль.")); return; }
-        A.push(new RollsDialog("Дуэль кубиков", [[a, p.name], [b, G.name(st, b)]], function (rolls) {
-          var win = G.duel(st, a, b, rolls[a], rolls[b], card), paid = card || win === a;
-          A.push(new MessageDialog("Итог дуэли", "Победил " + G.name(st, win) + "." +
-            (paid ? " Банк платит победителю " + money(C.DUEL_PRIZE) + "." : " Выплаты нет.")));
-        }, { uniqueTop: true, cancellable: false }));
+        var st = A.st, p = st.players[a], card = G.canDuel(st, a);
+        // Who may duel is secret (the thief's ability): the challenger confirms on a private screen,
+        // anyone may «change their mind», so a cancelled duel tells nothing.
+        A.push(new PrivateScene("Дуэль: проверка права", [a], function (scene) {
+          return [h("h2", null, "Дуэль против: " + G.name(st, b)),
+            h("p", { class: "big", style: "margin:10px 0 16px" }, card === null
+              ? "Права на дуэль у тебя нет (нужна карта «Дуэль»). Нажми «Передумал» и скажи, что передумал."
+              : "Право есть" + (card ? " — по карте «Дуэль»." : " — это твоя способность.") + " Начинаем? Можно и передумать."),
+            h("div", { class: "stack" }, btn("Начать дуэль", function () { scene.finish(true); }, { kind: "accent big", disabled: card === null }),
+              btn("Передумал", function () { scene.finish(false); }, { kind: "big" }))];
+        }, function (res) {
+          if (!res[a]) { A.toast("Дуэль не состоялась."); return; }
+          A.push(new RollsDialog("Дуэль кубиков", [[a, p.name], [b, G.name(st, b)]], function (rolls) {
+            var win = G.duel(st, a, b, rolls[a], rolls[b], card);
+            A.push(new MessageDialog("Итог дуэли", "Победил " + G.name(st, win) + ". Банк платит победителю " + money(C.DUEL_PRIZE) + "."));
+          }, { uniqueTop: true, cancellable: false }));
+        }));
       }));
     },
     dice: function () {
       A.push(new RollsDialog("Кубик", [[0, "Бросок"]], function () {}, { note: "Для споров: у кого больше — тот прав, ничья — перебросить." }));
     },
-    nextRound: function () {
-      var self = this, st = A.st, ri = st.round_index, warn = "";
+    // What is still undone in this round ("" when the round's step is complete).
+    roundWarn: function () {
+      var st = A.st, ri = st.round_index, warn = "";
       if (ri === 1 && !st.suspects_done) warn = "Тайные подозрения ещё не записаны! ";
       if (ri === 2 && st.clue_step < C.TOTAL_CLUES) warn = "Не все загадки пройдены (" + st.clue_step + " из 3). ";
       if (ri === 3 && st.lot_step < st.lot_ids.length) warn = "Проданы не все конверты (" + st.lot_step + " из " + st.lot_ids.length + "). ";
-      if (ri === 5 && !st.trial_done) warn = "Испытание за фрагмент ещё не проведено. ";
+      if (ri === 5 && G.hasRole(st, ACCOMPLICE) && !st.mail_done) warn = "Тайная почта ещё не разослана. ";
+      else if (ri === 5 && !st.trial_done) warn = "Испытание за фрагмент ещё не проведено. ";
       if (ri === 6 && !st.court_done) warn = "Голосование ещё не проведено! ";
+      return warn;
+    },
+    nextRound: function () {
+      var self = this, st = A.st, ri = st.round_index, warn = this.roundWarn();
       var nxt = ri === D.MAX_ROUND ? "подсчёт и раскрытие ролей" : "раунд " + (ri + 1) + " — " + D.ROUNDS[ri + 1].title;
       A.push(new ConfirmDialog("Дальше?", warn + "Следующий этап: " + nxt + ".", function () {
         G.nextRound(st);
@@ -1266,12 +1363,12 @@
           btn("Сделка", function () { A.push(new TxDialog("deal")); }, { cls: "slim" }),
           btn("Мои улики", function () { self.myRole(); }, { cls: "slim" }),
           btn("Ещё", function () { A.push(new MoreDialog(self)); }, { cls: "slim" }),
-          btn("Дальше »", function () { self.nextRound(); }, { kind: "accent", cls: "slim grow" })));
+          btn("Дальше »", function () { self.nextRound(); }, { kind: this.roundWarn() ? "" : "accent", cls: "slim grow" })));
     },
     playerChips: function (can, cb, hider) {
       var st = A.st;
       return h("div", { class: "chips" }, st.players.map(function (p, i) {
-        return btn(p.name + (i === hider ? " (прятал)" : ""), function () { cb(i); }, { kind: "accent", disabled: !can(i) });
+        return btn(p.name + (i === hider ? " (прятал)" : ""), function () { cb(i); }, { disabled: !can(i) });
       }));
     },
     area1: function () {
@@ -1323,6 +1420,10 @@
     },
     area5: function () {
       var self = this, st = A.st;
+      if (G.hasRole(st, ACCOMPLICE) && !st.mail_done)
+        return h("div", { class: "stack" }, card("Шаг 0 — Тайная почта", h("p", { class: "big" },
+          "Телефон идёт по кругу. Каждый тайно открывает свою почту и жмёт «Прочитано». Кому-то, может быть, пришло письмо…"), { icon: "envelope" }),
+          btn("Открыть почту по кругу", function () { self.mail(); }, { kind: "accent big" }));
       if (!st.trial_done)
         return h("div", { class: "stack" }, card("Шаг 1 из 3 — Испытание", h("p", { class: "big" }, "Все бросают кубик. У кого больше — тайно узнаёт цифру №1."), { icon: "safe" }),
           btn("Бросить кубики", function () { self.trial(); }, { kind: "accent big" }));
@@ -1335,7 +1436,7 @@
           btn("Не можем найти — ответ", function () { self.showAnswer(spot.answer, function () { G.skipFragment(st); }); }, { kind: "ghost", cls: "slim" }));
       }
       if (st.safe_opened_by !== null)
-        return card("Сейф вскрыт", h("p", { class: "big green" }, G.name(st, st.safe_opened_by) + " забрал(а) 3000 ₽. Жмите «Дальше» — суд."), { icon: "safe" });
+        return card("Сейф вскрыт", h("p", { class: "big green" }, G.name(st, st.safe_opened_by) + ": +3000 ₽ из сейфа. Жмите «Дальше» — суд."), { icon: "safe" });
       var tried = st.players.filter(function (p) { return p.safe_tried; }).map(function (p) { return p.name; });
       return h("div", { class: "stack" },
         card("Шаг 3 из 3 — Торг и взлом", h("p", null, "Торгуйте цифрами: «Сделка с цифрой». Знаешь цифры — жми «Вскрыть сейф». Попытка одна!" +
@@ -1345,11 +1446,11 @@
     },
     area6: function () {
       var self = this, st = A.st;
-      if (st.court_done) return card("Приговор", h("p", { class: "big" }, st.court_verdict + " Жмите «Дальше» — подсчёт и роли."), { icon: "scales" });
+      if (st.court_done) return card("Голоса записаны", h("p", { class: "big" }, "Приговор и деньги суда — при подсчёте. Жмите «Дальше» — подсчёт и роли."), { icon: "scales" });
       return h("div", { class: "stack" },
         card("Порядок суда", h("p", { class: "big" }, "Сначала речи (по 30 секунд, таймер сам переключает). Потом голосование."), { icon: "scales" }),
         h("div", { class: "row" }, btn("1. Речи", function () { self.speeches(); }, { kind: this.flags.speeches ? "" : "accent big" }),
-          btn("2. Голосование", function () { self.court(); }, { kind: "accent big" })),
+          btn("2. Кто есть кто", function () { self.court(); }, { kind: "accent big" })),
         st.safe_opened_by === null && st.players.some(function (p) { return !p.safe_tried; })
           ? btn("Последний шанс: сейф", function () { self.openSafe(); }, { kind: "danger", cls: "slim" }) : null);
     },
@@ -1359,14 +1460,16 @@
         h("div", { class: "label" }, "Игроки"),
         st.players.map(function (p) {
           return h("div", { class: "card pl" }, h("div", { class: "nm" }, h("b", null, p.name),
-            h("div", null, "улик: " + p.clues + " · фрагм.: " + p.fragments + " · сделок: " + p.deal_partners.length),
+            h("div", null, [["улик", p.clues], ["фрагм.", p.fragments], ["сделок", p.deal_partners.length]].map(function (x, k) {
+              return h("span", { style: "white-space:nowrap" }, (k ? " · " : "") + x[0] + ": " + x[1]);
+            })),
             st.round_index >= 5 ? h("div", { class: p.safe_tried ? "red" : "green" }, p.safe_tried ? "попытка сейфа потрачена" : "попытка сейфа: есть") : null),
             h("div", { class: "mn" }, money(p.balance)));
         }),
-        h("div", { class: "card warm pl" }, icon("coin", 32), h("div", { class: "nm" }, h("b", null, "Банк: " + money(st.bank)),
-          h("div", null, "Деньги на экране = купюры на руках"),
+        h("div", { class: "card warm pl" }, icon("coin", 32), h("div", { class: "nm" }, h("b", { style: "white-space:nowrap" }, "Банк: " + money(st.bank)),
           st.ious.length ? h("div", { class: "red" }, "Расписки банка: " + money(st.ious.reduce(function (s, x) { return s + x[1]; }, 0))) : null),
-          h("div", { class: "mn", style: "font-size:15px" }, "Сейф: " + (st.safe_opened_by !== null ? "вскрыт" : money(st.prize_in_safe)))));
+          h("div", { class: "mn", style: "font-size:15px;white-space:nowrap" }, "Сейф: " + (st.safe_opened_by !== null ? "вскрыт" : money(st.prize_in_safe)))),
+        h("p", { class: "muted small", style: "margin-top:6px" }, "Деньги на экране = купюры на руках"));
     },
   });
 
@@ -1384,7 +1487,11 @@
           h("div", { class: "grid2" },
             btn("Как играть", go(function () { A.push(new RulesDialog()); })),
             btn("Журнал", go(function () { A.push(new LogScene()); }))),
+          btn("Правила с картинками", openRules),
           btn(Sound.muted ? "Звук: выкл — включить" : "Звук: вкл — выключить", function () { Sound.toggle(); }),
+          Voice.available ? btn(Voice.on ? "Голос ведущего: вкл — выключить" : "Голос ведущего: выкл — включить", function () {
+            if (Voice.toggle()) Voice.say("Голос ведущего включён.");
+          }) : null,
           btn("Выйти в меню", go(function () { A.save(); A.reset(new MenuScene()); }), { kind: "ghost" })),
         h("div", { class: "actions" }, btn("Закрыть", function () { A.pop(); }, { kind: "accent" })));
     },
@@ -1418,6 +1525,15 @@
   });
 
   // ===================================================================== final
+  // «Your role was named by k of n−1» — shown only after the reveal.
+  function guessLine(j) {
+    var st = A.st;
+    if (!st.players.some(function (p) { return p.guesses && Object.keys(p.guesses).length; })) return "";
+    var g = st.players[j].guesses || {};
+    var right = Object.keys(g).filter(function (k) { return st.players[+k].role === g[k]; }).length;
+    return " · роль угадали " + G.guessedBy(st, j) + " из " + (st.players.length - 1) + " · сам угадал ролей: " + right;
+  }
+
   var FinalScene = inherit(function () {
     this.bonusLines = ["Тайные бонусы уже выданы."];
     if (!A.st.final_paid) {
@@ -1432,14 +1548,18 @@
       var self = this, st = A.st;
       if (!this.show)
         return h("div", { class: "screen center" }, icon("scales", 80), h("h1", { style: "font-size:42px;margin-top:8px" }, "Подсчёт"), rule(),
-          h("p", { style: "margin:10px 0 16px" }, "Сейчас откроются все роли. Банк выдаёт тайные бонусы ролей " +
-            "(детектив — за улики, аферист — комиссия за сделки, сообщник — доля из сейфа, нотариус — плата за гарантии):"),
+          h("p", { style: "margin:10px 0 16px" }, "Сейчас откроются все роли. Сначала приговор суда, потом банк выдаёт всё тайное: " +
+            "доходы ролей, доля сообщника, +300 ₽ за верное подозрение, +" + C.GUESS_REWARD + " ₽ за каждую угаданную роль, страховка и отмена штрафа:"),
           h("div", { class: "card stack" }, this.bonusLines.map(function (l) { return h("p", { class: "big" }, l); })),
           h("div", { class: "spacer" }),
-          btn("Раскрыть роли и итог", function () { self.show = true; Sound.play("fanfare"); A.scrollTop = true; }, { kind: "accent huge" }));
+          btn("Раскрыть роли и итог", function () {
+            self.show = true; Sound.play("fanfare"); A.scrollTop = true;
+            var win = G.finalResults(A.st).filter(function (r) { return r.place === 1; }).map(function (r) { return r.name; });
+            Voice.say("Победитель: " + win.join(" и ") + "!");
+          }, { kind: "accent huge" }));
       var res = G.finalResults(st);
       var winners = res.filter(function (r) { return r.place === 1; });
-      var notes = ["Вор — " + G.name(st, G.thief(st)) + ".", "Код сейфа: " + st.code.join("") + "."];
+      var notes = ["Вор — " + G.name(st, G.thief(st)) + ".", "Код сейфа: " + st.code.join("") + ".", st.court_verdict || ""];
       if (winners.some(function (r) { return r.tie; })) notes.push("Ничья — бросьте кубик.");
       if (st.safe_opened_by === null) notes.push("Сейф не вскрыли: " + money(st.prize_in_safe) + " — в банк.");
       return h("div", { class: "screen" },
@@ -1450,7 +1570,7 @@
             h("div", { class: "place" }, r.place),
             h("div", { class: "info" }, h("b", { style: "font-size:19px" }, r.name), h("div", { class: "gold small", style: "font-weight:800" }, D.ROLES[r.role].name),
               h("div", { class: "small " + (r.mission ? "green" : "red") }, r.mission ? "Миссия выполнена: +" + money(C.MISSION_BONUS) : "Миссия провалена: " + r.reasons.join(", ")),
-              h("div", { class: "muted small" }, "на руках " + money(r.money))),
+              h("div", { class: "muted small" }, "на руках " + money(r.money) + guessLine(r.index))),
             h("div", { class: "tot" }, money(r.total)));
         })),
         h("p", { class: "gold", style: "margin:14px 0" }, notes.join(" ")),

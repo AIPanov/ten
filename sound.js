@@ -78,4 +78,47 @@
       return muted;
     },
   };
+
+  // ---------------------------------------------------------------- voice of the host
+  // The phone reads aloud only what is public anyway: round speeches, events, the host's tasks,
+  // «pass the phone to …», deals. Never anything from a private screen.
+  var synth = root.speechSynthesis || null, ruVoice = null, voiceOn = true, primed = false;
+  try { voiceOn = localStorage.getItem("ten.voice") !== "0"; } catch (e) { /* private mode */ }
+  function pickVoice() {
+    if (!synth) return;
+    var ru = synth.getVoices().filter(function (v) { return /^ru/i.test(v.lang); });
+    ruVoice = ru.filter(function (v) { return v.localService; })[0] || ru[0] || null;
+  }
+  if (synth) { pickVoice(); try { synth.onvoiceschanged = pickVoice; } catch (e) { /* old browsers */ } }
+  function clean(s) {
+    return String(s).replace(/[«»"]/g, "").replace(/(\d)\s?₽/g, "$1 рублей").replace(/₽/g, "рублей")
+      .replace(/№/g, "номер ").replace(/\s+/g, " ").trim();
+  }
+  root.Voice = {
+    get available() { return !!synth; },
+    get on() { return voiceOn; },
+    toggle: function () {
+      voiceOn = !voiceOn;
+      try { localStorage.setItem("ten.voice", voiceOn ? "1" : "0"); } catch (e) { /* ignore */ }
+      if (!voiceOn && synth) synth.cancel();
+      return voiceOn;
+    },
+    // iPhone speaks only after a tap: the first button press «primes» the voice with an empty phrase.
+    unlock: function () {
+      if (!synth || primed) return;
+      primed = true;
+      try { var u = new SpeechSynthesisUtterance(" "); u.volume = 0; synth.speak(u); } catch (e) { /* ignore */ }
+    },
+    say: function (text, queue) {
+      if (!synth || !voiceOn || !text) return;
+      try {
+        if (!queue) synth.cancel();
+        var u = new SpeechSynthesisUtterance(clean(text));
+        u.lang = "ru-RU"; u.rate = 1.0;
+        if (ruVoice) u.voice = ruVoice;
+        synth.speak(u);
+      } catch (e) { /* no voice on this device */ }
+    },
+    stop: function () { if (synth) synth.cancel(); },
+  };
 })(window);

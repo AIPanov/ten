@@ -34,6 +34,8 @@
     var r = Object.assign({}, C.BY_PLAYERS[String(n)] || C.BY_PLAYERS["4"]);
     var bonus = r.THIEF_FREE_BONUS;
     r.FREE_TXT = bonus ? " и получает " + bonus + " ₽ от банка" : "";
+    r.EXPOSE_TXT = r.EXPOSE_SLACK ? "все, кроме одного" : "все остальные";
+    r.GUESS_REWARD = C.GUESS_REWARD;
     return r;
   }
   function rolesFor(n, rng) {
@@ -47,7 +49,7 @@
     return { name: name, role: role, balance: C.START_MONEY, clues: 0, fragments: 0, ability_used: false,
       suspect: null, vote: null, auctions_won: 0, deal_partners: [], last_fine: 0, secret_pending: 0,
       commissions: 0, hints: [], cleared: [], pairs: [], digits: {}, safe_tried: false, duel_cards: 0,
-      shields: 0, double_vote: false };
+      shields: 0, double_vote: false, guesses: {} };
   }
 
   var G = {
@@ -69,12 +71,17 @@
       event_deck: shuffle(rng, Object.keys(D.EVENTS).map(Number)), current_event: null, event_applied: false,
       clue_hider: null, fragment_hider: null, roles_shown: false, suspects_done: false, clue_step: 0,
       lot_ids: G.drawLots(rng, names.length), lot_step: 0, lots_sold: {},
-      court_done: false, thief_caught: false, court_verdict: "", trial_done: false, fragment_step: 0,
+      court_done: false, thief_caught: false, court_verdict: "", court_outcome: "", mail_done: false, trial_done: false, fragment_step: 0,
       final_paid: false, spot_ids: sample(rng, range(D.SPOTS.length), C.TOTAL_CLUES + 2),
       alibi_places: [], alibi_true: 0, alibi_known: {}, alibi_answers: {}, forgetful: null,
       fake_armed: false, fake_given_to: null, timer_left: 0, mode: mode || C.DEFAULT_MODE, notary_book: [], log: [],
     };
     G.makeAlibis(st, rng);
+    if (G.rulesOf(st).THIEF_START_DIGIT) {   // 3–4 players: the thief locked the safe and remembers one digit
+      var pos = String(randrange(rng, C.CODE_LEN) + 1), th = st.players[G.thief(st)];
+      th.digits[pos] = st.code[+pos - 1];
+      th.hints.push("Ты сам запирал сейф и помнишь цифру №" + pos + " = " + th.digits[pos]);
+    }
     G.note(st, "Новая партия: " + names.join(", "));
     return st;
   };
@@ -138,15 +145,9 @@
     });
     G.note(st, "Ответы алиби: " + parts.join(", "));
   };
+  // Players whose answer differs from the truth (innocents remember it exactly).
   G.alibiMismatch = function (st) {
-    var keys = Object.keys(st.alibi_answers);
-    if (!keys.length) return [];
-    var votes = {};
-    keys.forEach(function (i) { var v = st.alibi_answers[i]; votes[v] = (votes[v] || 0) + 1; });
-    var top = Math.max.apply(null, Object.values(votes));
-    var common = Object.keys(votes).filter(function (k) { return votes[k] === top; });
-    if (common.length > 1) return [];
-    return keys.filter(function (i) { return String(st.alibi_answers[i]) !== common[0]; }).map(Number);
+    return Object.keys(st.alibi_answers).filter(function (i) { return Number(st.alibi_answers[i]) !== Number(st.alibi_true); }).map(Number);
   };
 
   // ---------- helpers ----------
@@ -243,14 +244,13 @@
   };
   G.payBank = function (st, i, amount, why, fine) {
     var p = st.players[i];
-    if (fine && p.shields > 0) {
-      p.shields -= 1;
-      G.note(st, p.name + ": штраф " + amount + " ₽ отменён страховкой");
-      return 0;
-    }
     var paid = Math.min(amount, p.balance);
     p.balance -= paid;
-    if (fine) p.last_fine = paid;
+    if (fine && p.shields > 0) {
+      // Insurance: pays like everyone (cash matches the app), gets it back secretly at the final count.
+      p.shields -= 1;
+      p.secret_pending += paid;
+    } else if (fine) p.last_fine = paid;
     G.receive(st, paid);
     G.note(st, (p.name + " −" + paid + " ₽ " + (why || "")).trim());
     return paid;
@@ -263,8 +263,8 @@
     return paid;
   };
   G.totalMoney = function (st) {
-    var owed = st.ious.reduce(function (s, x) { return s + x[1]; }, 0);
-    return st.bank + st.prize_in_safe + st.players.reduce(function (s, p) { return s + p.balance; }, 0) - owed;
+    // Bank IOUs are promises, not bills: the bills on the table always add up to TOTAL_MONEY.
+    return st.bank + st.prize_in_safe + st.players.reduce(function (s, p) { return s + p.balance; }, 0);
   };
 
   // ---------- rounds ----------
@@ -347,7 +347,7 @@
       lines.push("Возьми у банка " + amount + " ₽.");
     } else if (kind === "fine") {
       var paid = G.payBank(st, winner, amount, "", true);
-      lines.push(paid ? "Отдай банку " + paid + " ₽." : "Штраф отменён твоей страховкой!");
+      lines.push(paid ? "Отдай банку " + paid + " ₽." : "Штраф не взят: у тебя нет денег.");
     } else if (kind === "tax") {
       var got = G.others(st, winner).reduce(function (s, j) { return s + G.transfer(st, j, winner, amount); }, 0);
       lines.push("Каждый платит тебе по " + amount + " ₽ (всего " + got + " ₽).");
@@ -403,8 +403,8 @@
   G.recordDeal = function (st, seller, buyer, price, item, digitPos, guaranteed, what) {
     var s = st.players[seller], b = st.players[buyer];
     item = item || "что-то";
-    s.deal_partners.push(buyer);
-    b.deal_partners.push(seller);
+    var counts = price >= C.DEAL_MIN;   // empty deals do not close missions or earn commission
+    if (counts) { s.deal_partners.push(buyer); b.deal_partners.push(seller); }
     var paid = price > 0 ? G.transfer(st, buyer, seller, price) : 0;
     if (digitPos && digitPos in s.digits) b.digits[digitPos] = s.digits[digitPos];
     var story = s.name + " продаёт " + item + " → " + b.name + (paid ? ", " + paid + " ₽" : ", без денег");
@@ -414,12 +414,12 @@
       if (digitPos && !what) what = "цифра №" + digitPos + " = " + b.digits[digitPos];
       st.notary_book = st.notary_book || [];
       st.notary_book.push({ seller: seller, buyer: buyer, what: what || item });
-      if (G.hasRole(st, NOTARY)) st.players[G.roleIndex(st, NOTARY)].secret_pending += fee;
+      if (G.hasRole(st, NOTARY) && b.role !== NOTARY) st.players[G.roleIndex(st, NOTARY)].secret_pending += fee;
     }
     G.note(st, "Сделка: " + story);
     [seller, buyer].forEach(function (i) {
       var p = st.players[i];
-      if (p.role === AFERIST && p.commissions < C.AFERIST_COMMISSION_MAX) {
+      if (counts && p.role === AFERIST && p.commissions < C.AFERIST_COMMISSION_MAX) {
         p.commissions += 1;
         p.secret_pending += C.AFERIST_COMMISSION;
       }
@@ -432,14 +432,17 @@
     if (ra === rb) return null;
     var win = ra > rb ? a : b;
     G.note(st, "Дуэль: " + G.name(st, a) + " " + ra + " против " + rb + " " + G.name(st, b));
-    if (card) {
-      st.players[a].duel_cards -= 1;
-      G.bankPay(st, win, C.DUEL_PRIZE, "(дуэль)");
-    } else {
-      st.players[a].ability_used = true;
-      if (win === a) G.bankPay(st, a, C.DUEL_PRIZE, "(дуэль)");
-    }
+    if (card) st.players[a].duel_cards -= 1;
+    else st.players[a].ability_used = true;
+    G.bankPay(st, win, C.DUEL_PRIZE, "(дуэль)");   // same for card and ability: the result tells nothing
     return win;
+  };
+  // true: by a «Duel» card, false: by the thief's ability, null: no right (checked on a private screen)
+  G.canDuel = function (st, a) {
+    var p = st.players[a];
+    if (p.duel_cards > 0) return true;
+    if (p.role === THIEF && !p.ability_used && !G.rulesOf(st).FAKE_HINT) return false;
+    return null;
   };
 
   // ---------- round 5: safe ----------
@@ -472,16 +475,49 @@
     if (guess.join("") === st.code.join("")) {
       st.safe_opened_by = i;
       p.balance += st.prize_in_safe;
-      G.note(st, p.name + " вскрыл(а) сейф: +" + st.prize_in_safe + " ₽");
+      G.note(st, "Сейф вскрыт — " + p.name + ": +" + st.prize_in_safe + " ₽");
       st.prize_in_safe = 0;
       return true;
     }
-    G.note(st, p.name + ": неверный код, сработала сигнализация");
+    var fine = G.payBank(st, i, C.SAFE_FINE, "(сигнализация)", true);
+    G.note(st, p.name + ": неверный код, сработала сигнализация (−" + fine + " ₽)");
     return false;
   };
 
   // ---------- round 6: court ----------
   G.votesAgainst = function (st, i) { return st.players.filter(function (p) { return p.vote === i; }).length; };
+
+  // Court «who is who» — see GameState.set_guesses in game/state.py.
+  G.guessableRoles = function (st, i) {
+    var n = st.players.length;
+    var pool = D.ROLE_IDS.concat(n >= 5 ? [ACCOMPLICE] : [], n >= 6 ? [NOTARY] : []);
+    return pool.filter(function (r) { return r !== THIEF; });   // same list for everyone: see guessable_roles
+  };
+  G.setGuesses = function (st, votes, roles) {
+    st.players.forEach(function (p, i) {
+      var g = {}, mine = (roles && roles[i]) || {};
+      Object.keys(mine).forEach(function (j) { if (mine[j] && +j !== i) g[String(j)] = mine[j]; });
+      // each role belongs to one person: a role put on several players counts for none of them
+      var vals = Object.keys(g).map(function (j) { return g[j]; });
+      Object.keys(g).forEach(function (j) {
+        if (g[j] === THIEF || vals.filter(function (r) { return r === g[j]; }).length > 1) delete g[j];
+      });
+      if (votes[i] !== null && votes[i] !== undefined) g[String(votes[i])] = THIEF;
+      p.guesses = g;
+      var right = Object.keys(g).filter(function (j) { return st.players[+j].role === g[j]; }).length;
+      p.secret_pending += right * C.GUESS_REWARD;
+    });
+    return G.setVotes(st, votes);
+  };
+  G.guessedBy = function (st, j) {
+    var role = st.players[j].role;
+    return st.players.filter(function (p, i) { return i !== j && (p.guesses || {})[String(j)] === role; }).length;
+  };
+  G.exposed = function (st, j) {
+    if (!st.players.some(function (p) { return p.guesses && Object.keys(p.guesses).length; })) return false;
+    var need = st.players.length - 1 - (G.rulesOf(st).EXPOSE_SLACK || 0);
+    return G.guessedBy(st, j) >= need;
+  };
   G.setVotes = function (st, votes) {
     Object.keys(votes).forEach(function (i) { st.players[i].vote = votes[i]; });
     var th = G.thief(st), R = G.rulesOf(st), right = 0, wrong = 0, verdict;
@@ -489,29 +525,57 @@
       var w = st.players[i].double_vote ? 2 : 1;
       if (votes[i] === th) right += w; else wrong += w;
     });
+    // The verdict and its money are kept until the final count: who won the court tells who the thief is.
     if (right > wrong) {
-      st.thief_caught = true;
-      var det = G.roleIndex(st, DETECTIVE), fine = R.CAUGHT_FINE;
-      var paid = G.transfer(st, th, det, fine);
-      if (paid < fine) G.bankPay(st, det, fine - paid, "(суд)");
-      verdict = "Большинство угадало вора! Вор платит детективу " + fine + " ₽.";
+      st.thief_caught = true; st.court_outcome = "caught";
+      verdict = "Большинство угадало вора! Вор платит детективу " + R.CAUGHT_FINE + " ₽.";
     } else if (wrong > right) {
-      var bonus = R.THIEF_FREE_BONUS;
-      if (bonus) {
-        G.bankPay(st, th, bonus, "(суд)");
-        verdict = "Большинство ошиблось. " + bonus + " ₽ из банка получает вор.";
-      } else verdict = "Большинство ошиблось. Вор ушёл от суда.";
-    } else verdict = "Голоса разделились поровну. Бонус не получает никто.";
-    var lucky = range(st.players.length).filter(function (i) { return st.players[i].suspect === th; });
-    lucky.forEach(function (i) { G.bankPay(st, i, C.SUSPECT_REWARD, "(верное подозрение)"); });
-    if (lucky.length)
-      verdict += " Вора угадали ещё в раунде 1 (+300 ₽): " + lucky.map(function (i) { return G.name(st, i); }).join(", ") + ".";
+      st.court_outcome = "free";
+      verdict = R.THIEF_FREE_BONUS ? "Большинство ошиблось. " + R.THIEF_FREE_BONUS + " ₽ из банка получает вор."
+        : "Большинство ошиблось. Вор ушёл от суда.";
+    } else { st.court_outcome = "tie"; verdict = "Голоса разделились поровну. Бонус не получает никто."; }
     if (st.players.some(function (p) { return p.double_vote; }))
       verdict += " (Голос с картой «присяжного» считался за два.)";
     st.court_done = true;
     st.court_verdict = verdict;
-    G.note(st, "Суд: " + verdict);
+    G.note(st, "Суд: голоса записаны, приговор — при подсчёте");
     return verdict;
+  };
+  G.payCourt = function (st) {   // court money, at the final count
+    var th = G.thief(st), out = st.court_outcome, R = G.rulesOf(st);
+    if (out !== "paid")   // right suspicion in round 1 (the accomplice knows the thief: no reward)
+      st.players.forEach(function (p) { if (p.suspect === th && p.role !== ACCOMPLICE) p.secret_pending += C.SUSPECT_REWARD; });
+    st.court_outcome = "paid";
+    if (out === "caught") {
+      var det = G.roleIndex(st, DETECTIVE), fine = R.CAUGHT_FINE;
+      var paid = G.transfer(st, th, det, fine);
+      if (paid < fine) G.bankPay(st, det, fine - paid, "(суд)");
+      return ["Суд: " + G.name(st, th) + " → " + G.name(st, det) + ": " + fine + " ₽ (вор платит детективу)"];
+    }
+    if (out === "free" && R.THIEF_FREE_BONUS) {
+      G.bankPay(st, th, R.THIEF_FREE_BONUS, "(суд)");
+      return ["Суд: " + G.name(st, th) + " +" + R.THIEF_FREE_BONUS + " ₽ (вор ушёл от суда)"];
+    }
+    return [];
+  };
+
+  // ---------- round 5: the accomplice's mail (see GameState.send_mail) ----------
+  G.sendMail = function (st) {
+    var letters = {};
+    st.players.forEach(function (p, i) { letters[i] = "Писем для тебя нет. Посиди пару секунд, будто читаешь, и нажми «Прочитано»."; });
+    st.mail_done = true;
+    if (!G.hasRole(st, ACCOMPLICE)) return letters;
+    var th = G.thief(st), acc = G.roleIndex(st, ACCOMPLICE), t = st.players[th], a = st.players[acc];
+    a.ability_used = true;
+    var missing = range(C.CODE_LEN).map(function (k) { return String(k + 1); }).filter(function (k) { return !(k in t.digits); });
+    if (!missing.length) { letters[acc] = "Вор уже знает весь код — твоё письмо не нужно. Помогай ему на суде."; return letters; }
+    var pos = missing[0], d = st.code[+pos - 1];
+    t.digits[pos] = d; a.digits[pos] = d;
+    t.hints.push("Письмо от неизвестного друга: цифра №" + pos + " = " + d);
+    a.hints.push("Ты тайно отправил вору цифру №" + pos + " = " + d);
+    letters[th] = "Письмо от неизвестного друга: «Цифра №" + pos + " = " + d + "». Кто-то здесь на твоей стороне.";
+    letters[acc] = "Ты подсмотрел цифру №" + pos + " = " + d + " и тайно отправил её вору. Он не знает, что это ты.";
+    return letters;
   };
 
   // ---------- abilities ----------
@@ -531,19 +595,18 @@
     return text;
   };
 
-  G.accomplicePeek = function (st, i) { st.players[i].ability_used = true; return G.digitHint(st, i); };
   G.aferistCancel = function (st, i) {
     var p = st.players[i];
     var refund = Math.min(p.last_fine, C.AFERIST_CANCEL_MAX);
     p.ability_used = true;
     p.last_fine = 0;
-    if (refund) G.bankPay(st, i, refund, "");
+    p.secret_pending += refund;   // secretly, at the count: taking money from the bank in public gave the role away
     return refund;
   };
 
   // ---------- scoring ----------
   G.paySecretBonuses = function (st) {
-    var lines = [], cut = G.rulesOf(st).ACCOMPLICE_CUT || 0, th = G.thief(st);
+    var lines = G.payCourt(st), cut = G.rulesOf(st).ACCOMPLICE_CUT || 0, th = G.thief(st);
     if (cut && st.safe_opened_by === th && G.hasRole(st, ACCOMPLICE)) {
       var acc = G.roleIndex(st, ACCOMPLICE);
       var paid = G.transfer(st, th, acc, cut);
@@ -551,8 +614,8 @@
     }
     st.players.forEach(function (p, i) {
       if (p.secret_pending) {
-        G.bankPay(st, i, p.secret_pending, "(тайный бонус роли)");
-        lines.push(p.name + ": +" + p.secret_pending + " ₽ (тайный бонус роли)");
+        G.bankPay(st, i, p.secret_pending, "(тайные выплаты)");
+        lines.push(p.name + ": +" + p.secret_pending + " ₽ (тайные выплаты)");
         p.secret_pending = 0;
       }
     });
@@ -562,21 +625,18 @@
     var p = st.players[i], R = G.rulesOf(st), miss = [];
     if (p.role === THIEF) {
       if (st.safe_opened_by !== i) miss.push("не вскрыл сейф");
-      if (st.thief_caught) miss.push("пойман на суде");
     } else if (p.role === DETECTIVE) {
       if (p.hints.length < R.DETECTIVE_MIN_HINTS) miss.push("подсказок " + p.hints.length + " из " + R.DETECTIVE_MIN_HINTS);
       if (p.vote !== G.thief(st)) miss.push("на суде назван не вор");
     } else if (p.role === SPY) {
       if (new Set(p.deal_partners).size < 2) miss.push("нет сделок с двумя разными игроками");
       if (p.balance < R.SPY_MIN) miss.push("меньше " + R.SPY_MIN + " ₽");
-      var va = G.votesAgainst(st, i);
-      if (va > C.SPY_MAX_VOTES) miss.push("на суде за шпиона голосовали " + va + " чел.");
     } else if (p.role === AFERIST) {
       if (p.balance < R.AFERIST_MIN) miss.push("меньше " + R.AFERIST_MIN + " ₽");
       if (p.auctions_won < 1) miss.push("не выиграл ни одного лота");
       if (!p.deal_partners.length) miss.push("нет ни одной сделки");
     } else if (p.role === ACCOMPLICE) {
-      if (st.thief_caught) miss.push("вора поймали на суде");
+      if (G.exposed(st, G.thief(st))) miss.push("вора разгадали на суде (" + G.guessedBy(st, G.thief(st)) + " из " + (st.players.length - 1) + ")");
       if (p.balance < R.ACCOMPLICE_MIN) miss.push("меньше " + R.ACCOMPLICE_MIN + " ₽");
     } else if (p.role === NOTARY) {
       var book = (st.notary_book || []).length;
@@ -584,6 +644,7 @@
       if (p.balance < R.NOTARY_MIN) miss.push("меньше " + R.NOTARY_MIN + " ₽");
       if (!p.deal_partners.length) miss.push("нет ни одной своей сделки");
     }
+    if (G.exposed(st, i)) miss.push("разгадан на суде: роль назвали " + G.guessedBy(st, i) + " из " + (st.players.length - 1));
     return miss;
   };
   G.finalResults = function (st) {
