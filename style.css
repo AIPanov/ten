@@ -289,3 +289,6 @@ ul.dots li + li { margin-top: 4px; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 @media (max-width: 359px) { .bar .inner > .btn.slim { font-size: 12.5px; padding: 6px 2px; } .bar .inner { gap: 4px; } }
+
+.checks { list-style: none; padding: 0; margin: 4px 0 2px; }
+.checks li { margin: 2px 0; }

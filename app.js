@@ -370,7 +370,7 @@
       if (this.mode === "deal") {
         return this.total() <= bal;
       }
-      if (this.mode === "auction") return this.amount >= C.AUCTION_START && this.amount <= bal;
+      if (this.mode === "auction") return this.amount >= C.AUCTION_START && this.amount % C.AUCTION_STEP === 0 && this.amount <= bal;
       return true;
     },
     ok: function () {
@@ -434,7 +434,7 @@
               "Покупатель доплачивает " + money(C.NOTARY_FEE) + " в банк."
             : "Без гарантии подсказку шепчут на ухо — можно соврать, и на доску она не попадёт. Зато дешевле.")) : null,
         this.needsAmount() ? h("div", { style: "margin-top:14px" },
-          h("div", { class: "muted small" }, { deal: "Цена (0 — без денег)", auction: "Его ставка" }[this.mode] || "Сумма"),
+          h("div", { class: "muted small" }, { deal: "Цена (0 — без денег)", auction: "Его ставка (кратно " + C.AUCTION_STEP + " ₽)" }[this.mode] || "Сумма"),
           h("div", { class: "amount" }, money(this.amount)),
           h("div", { class: "bills" }, C.BILLS.map(function (bill) {
             return btn("+" + bill, function () { self.amount += bill; });
@@ -544,6 +544,7 @@
           this.players.length > 1 ? h("p", { class: "muted" }, (this.idx + 1) + " из " + this.players.length) : null,
           this.cancellable && this.idx === 0 ? btn("Отмена", function () { A.pop(); }, { kind: "ghost" }) : null));
       }
+      if (this.showSay && this.said !== this.idx) { this.said = this.idx; Voice.say(this.showSay); }   // same words for everyone
       return h("div", { class: "screen with-bar" }, h("div", { class: "private-head" }, name + " — только для тебя"),
         this.renderFn(this, i));
     },
@@ -587,14 +588,21 @@
     return lines;
   }
 
+  // Role name and mission: the first thing on «Моя роль» (live game 2026-11-14: «надо, чтобы сразу было понятно, моя роль»).
+  function roleHead(i, intro) {
+    var p = A.st.players[i], role = D.ROLES[p.role], R = rules();
+    return h("div", { class: "stack" },
+      h("div", null, h("div", { class: "muted small" }, "Твоя роль"), h("div", { class: "role-name" }, role.name), intro ? h("p", null, role.intro) : null),
+      h("div", { class: "card warm" }, h("div", { class: "label" }, "Твоя миссия (+2000 ₽ в конце)"),
+        h("ul", { class: "dots" }, role.goals.map(function (g) { return G.fmt(g, R); }).filter(Boolean).map(function (g) { return h("li", null, g); }))));
+  }
+
   function roleCard(i, o) {
     var st = A.st, p = st.players[i], role = D.ROLES[p.role], R = rules();
     var ability = R.FAKE_HINT && role.ability_fake ? role.ability_fake : role.ability;
     var showSecret = role.secret && !(p.role === ACCOMPLICE && !R.ACCOMPLICE_CUT);
     return h("div", { class: "stack" },
-      h("div", null, h("div", { class: "muted small" }, "Твоя роль"), h("div", { class: "role-name" }, role.name), h("p", null, role.intro)),
-      h("div", { class: "card warm" }, h("div", { class: "label" }, "Твоя миссия (+2000 ₽ в конце)"),
-        h("ul", { class: "dots" }, role.goals.map(function (g) { return h("li", null, G.fmt(g, R)); }))),
+      o.head === false ? null : roleHead(i, true),
       h("div", { class: "card" }, h("div", { class: "label" }, "Способность"), h("p", null, ability),
         showSecret ? h("p", { class: "green", style: "margin-top:6px" }, G.fmt(role.secret, R)) : null),
       o.plan ? h("div", { class: "card" }, h("div", { class: "label" }, "Твой план по раундам"),
@@ -631,39 +639,64 @@
     };
   }
 
-  // Court «who is who»: name the thief (required), then optionally a role for each of the others.
-  // Same screen for everyone, so how long someone holds the phone tells nothing.
+  function mmss(sec) { sec = Math.ceil(sec); return Math.floor(sec / 60) + ":" + ("0" + sec % 60).slice(-2); }
+  // «Кружка» → «К _ _ _ _ _ (6 букв)»; several words are masked one by one.
+  function riddleHintMask(answer) {
+    var words = answer.split(" ");
+    return words.map(function (w) { return w[0] + " _".repeat(w.length - 1); }).join("   ") +
+      (words.length === 1 ? " (" + answer.length + " " + plural(answer.length, "буква", "буквы", "букв") + ")" : "");
+  }
+  function riddleHintSpoken(answer) {
+    var words = answer.split(" ");
+    if (words.length > 1) return "ответ из " + words.length + " слов, первое начинается на букву " + words[0][0] + ".";
+    return "ответ начинается на букву " + answer[0] + ", в нём " + answer.length + " " + plural(answer.length, "буква", "буквы", "букв") + ".";
+  }
+  function plural(n, one, few, many) {
+    var m10 = n % 10, m100 = n % 100;
+    if (m10 === 1 && m100 !== 11) return one;
+    if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+    return many;
+  }
+
+  // Court «who is who»: name the thief (required), then a role or «не знаю» for each of the others (4–6 players).
+  // Same screen for everyone, so how long someone holds the phone tells nothing. Big buttons, one question per
+  // person, and «Готово» opens only when every question has an answer — the youngest players skipped them before.
   function renderCourt(scene, i) {
     var st = A.st, d = scene.data, R = rules();
     if (!d.roles) d.roles = {};
     var roleNames = G.guessableRoles(st, i);
     var cleared = st.players[i].role === THIEF ? [] : st.players[i].cleared;   // proven «not the thief» on own board
-    var out = [h("h2", null, "1. Кто вор?"),
-      h("p", { class: "muted small", style: "margin:4px 0 10px" }, "Голос за вора решает деньги суда. Изменить нельзя. Если вор — ты, назови кого угодно."),
-      h("div", { class: "chips" }, G.others(st, i).map(function (j) {
+    var out = [h("h2", null, roleNames.length ? "1. Кто вор?" : "Кто вор?"),
+      h("p", { class: "muted", style: "margin:4px 0 10px" }, "Нажми на имя. Если вор — ты, назови кого угодно."),
+      h("div", { class: "stack" }, G.others(st, i).map(function (j) {
         var out = cleared.indexOf(j) >= 0;
-        return btn(out ? h("span", null, G.name(st, j), h("small", null, "на доске: не вор")) : G.name(st, j),
-          function () { d.vote = j; delete d.roles[j]; }, { kind: d.vote === j ? "selected" : (out ? "ghost" : ""), cls: "col" });
+        return btn(out ? h("span", null, G.name(st, j), h("small", null, " — на доске: не вор")) : G.name(st, j),
+          function () { d.vote = j; delete d.roles[j]; }, { kind: d.vote === j ? "selected big" : (out ? "ghost big" : "big") });
       }))];
-    if (d.vote !== undefined) {
-      out.push(h("h2", { style: "margin-top:18px" }, "2. Кто есть кто?"),
-        h("p", { class: "muted small", style: "margin:4px 0 10px" }, "По желанию. За каждую верную роль +" + money(C.GUESS_REWARD) +
-          " — тайно, при подсчёте. Чью роль угадают " + R.EXPOSE_TXT + ", тот проваливает миссию. Не знаешь — оставь «?»."));
-      G.others(st, i).filter(function (j) { return j !== d.vote; }).forEach(function (j) {
-        out.push(h("div", { style: "margin-top:8px" }, h("div", { class: "label" }, G.name(st, j)),
-          h("div", { class: "chips tight" }, [null].concat(roleNames).map(function (r) {
-            var on = (d.roles[j] || null) === r;
-            return btn(r ? cap(D.ROLES[r].name) : "?", function () {
-              Object.keys(d.roles).forEach(function (k) { if (d.roles[k] === r) delete d.roles[k]; });   // one role — one person
-              if (r) d.roles[j] = r; else delete d.roles[j];
-            },
-              { kind: on ? (r ? "selected" : "q") : "", cls: "slim" });
+    var rest = G.others(st, i).filter(function (j) { return j !== d.vote; });
+    if (d.vote !== undefined && roleNames.length) {
+      out.push(h("h2", { style: "margin-top:20px" }, "2. Кто есть кто?"),
+        h("p", { class: "muted", style: "margin:4px 0 6px" }, "Под каждым именем выбери роль — или «Не знаю». " +
+          "Верная роль: +" + money(C.GUESS_REWARD) + " при подсчёте. Каждую роль — только одному."));
+      rest.forEach(function (j) {
+        out.push(h("div", { class: "card", style: "margin-top:10px" }, h("h3", null, "Кто такой " + G.name(st, j) + "?"),
+          h("div", { class: "grid2", style: "margin-top:8px" }, roleNames.concat(["?"]).map(function (r) {
+            var on = d.roles[j] === r;
+            return btn(r === "?" ? "Не знаю" : cap(D.ROLES[r].name), function () {
+              if (r !== "?") Object.keys(d.roles).forEach(function (k) { if (d.roles[k] === r) delete d.roles[k]; });   // one role — one person
+              d.roles[j] = r;
+            }, { kind: on ? "selected" : (r === "?" ? "q" : "") });
           }))));
       });
     }
+    var ready = d.vote !== undefined && (!roleNames.length || rest.every(function (j) { return d.roles[j]; }));
+    var left = d.vote === undefined ? "Сначала выбери вора" : (ready ? null : "Ответь про каждого — роль или «Не знаю»");
     out.push(h("div", { style: "margin-top:16px;margin-bottom:40px" }, suspectBoard(i)),
-      bar(btn("Готово", function () { scene.finish({ vote: d.vote, roles: d.roles }); },
-        { kind: "accent big", disabled: d.vote === undefined })));
+      bar(btn(left || "Готово", function () {
+        var roles = {};
+        Object.keys(d.roles).forEach(function (k) { if (d.roles[k] !== "?") roles[k] = d.roles[k]; });
+        scene.finish({ vote: d.vote, roles: roles });
+      }, { kind: "accent big", disabled: !ready })));
     return out;
   }
 
@@ -700,10 +733,11 @@
       }, { kind: "accent" }) : h("p", { class: "muted" }, "Штрафов пока не было — отменять нечего.");
     }
     return [
+      roleHead(i, false), h("div", { class: "spacer" }),
       suspectBoard(i), h("div", { class: "spacer" }), hintsCard(p), h("div", { class: "spacer" }),
       h("div", { class: "card gold", style: "margin-bottom:12px" }, h("div", { class: "label" }, "Использовать способность"),
         h("div", { style: "margin-top:8px" }, act)),
-      roleCard(i, { plan: true, hints: false }), hideBar(scene, "Скрыть"),
+      roleCard(i, { plan: true, hints: false, head: false }), hideBar(scene, "Скрыть"),
     ];
   }
 
@@ -944,7 +978,7 @@
       var self = this, st = A.st;
       A.push(new PrivateScene("Места для тайников", [who], function (scene) {
         return [h("h2", null, "Где спрятать бумажки «" + label + "»"),
-          h("p", { class: "muted", style: "margin-bottom:12px" }, "Остальные пока ждут на кухне. Не прячь внутри техники и там, куда " +
+          h("p", { class: "muted", style: "margin-bottom:12px" }, "Остальные пока ждут на кухне и включают музыку погромче — чтобы не слышать шагов. Не прячь внутри техники и там, куда " +
             "надо лезть. Если такого места у вас нет — нажми «Заменить»."),
           h("div", { class: "stack" }, slots.map(function (slot, n) {
             var spot = D.SPOTS[st.spot_ids[slot]];
@@ -992,17 +1026,18 @@
           h("p", { style: "margin:10px 0 14px" }, "Один из игроков держит кассу — все игровые деньги. Он такой же игрок, просто " +
             "выдаёт и принимает купюры. Телефон скажет, кому и сколько."),
           h("ol", { class: "list" }, [
-            "Каждому игроку выдайте 1500 ₽: две по 500, четыре по 100 и две по 50.",
+            "Каждому игроку выдайте 1500 ₽: две по 500, четыре по 100 и две по 50. Быстрее, если банкир заранее разложит стопки. Фишки для покера: договоритесь, какой цвет сколько стоит.",
             "Коробка — это сейф с картиной. Положите в неё 3000 ₽ (награду музея) и закройте. Её вскроют в раунде 5 — кодом на телефоне.",
             "Всё остальное — касса банка (около " + money(Math.round(st.bank / 1000) * 1000) + ").",
-            "Нужны ещё: кубик, ручка и листок каждому — записывать подсказки и цифры.",
+            "Свои деньги каждый держит перед собой. Кассу трогает только банкир. Ещё нужны: кубик, ручка и листок каждому, 5 стикеров или бумажек (о них — на следующем шаге).",
             "Бумажные конверты НЕ нужны: аукцион идёт прямо на экране.",
           ].map(function (s) { return h("li", null, s); }))];
         next[0] = "Деньги розданы, дальше";
       } else if (this.step === 3) {
         var ch = st.clue_hider, fh = st.fragment_hider;
         body = [h("div", { class: "row", style: "align-items:center" }, h("div", { style: "flex:none" }, icon("magnifier", 46)), h("h1", null, "Тайники")),
-          h("p", { style: "margin-top:10px" }, "Нарежьте 5 бумажек. На трёх напишите «УЛИКА», на двух — «ФРАГМЕНТ». Их спрячут по квартире. " +
+          h("p", { style: "margin-top:10px" }, "Возьмите 5 стикеров или бумажек. На трёх одного цвета напишите «УЛИКА 1», «УЛИКА 2», «УЛИКА 3», на двух другого — " +
+            "«ФРАГМЕНТ 2» и «ФРАГМЕНТ 3» (цифру №1 не прячут — её разыграют кубиком в раунде 5). Их спрячут по квартире. " +
             "В игре телефон покажет загадку — ответ на неё и есть место, где лежит бумажка. Нашёл — телефон тайно скажет, кто не вор " +
             "(улика) или цифру кода (фрагмент)."),
           this.hiderRow("Кто прячет улики?", "clue_hider", "fragment_hider"),
@@ -1020,7 +1055,7 @@
         body = [h("div", { class: "row", style: "align-items:center" }, h("div", { style: "flex:none" }, icon("mask", 46)), h("h1", null, "Раздача ролей")),
           h("p", { style: "margin:10px 0" }, "Телефон по очереди обойдёт всех. Каждый тайно увидит свою роль, миссию и ПЛАН ПО РАУНДАМ — что " +
             "делать, чтобы выиграть. Прочитай план внимательно: это твоя инструкция на всю игру. Свою роль, план и подсказки " +
-            "можно открыть снова в любой момент — кнопка «Мои улики»."),
+            "можно открыть снова в любой момент — кнопка «Моя роль»."),
           h("div", { class: "card" }, D.ROLE_ORDER.filter(function (r) { return G.hasRole(st, r); }).map(function (r) {
             return h("p", { class: "small", style: "margin:4px 0" }, h("b", { class: "gold" }, D.ROLES[r].name + ": "), D.ROLES[r].intro);
           })),
@@ -1168,6 +1203,7 @@
         this.promptT += dt;
         if (this.promptT > PROMPT_EVERY) this.newPrompt();
       }
+      this.riddleClock(dt);
       if (!this.running || (A.top() && A.top().pausesTimer)) { Sound.stopLoop(); return; }
       var total = G.minutes(st) * 60;
       st.timer_left = Math.max(0, st.timer_left - dt);
@@ -1226,7 +1262,8 @@
       A.push(new TurnTimer("Речи на суде", 30, A.st.players.map(function (p) { return p.name; }), "Кого обвиняешь и почему? Или защищайся."));
     },
     court: function () {
-      var court = new PrivateScene("Суд: кто есть кто", G.range(A.st.players.length), renderCourt, function (res) {
+      var R = rules();
+      var court = new PrivateScene("Суд: " + R.COURT_TITLE.toLowerCase(), G.range(A.st.players.length), renderCourt, function (res) {
         var st = A.st, votes = {}, roles = {};
         Object.keys(res).forEach(function (i) { votes[i] = res[i].vote; roles[i] = res[i].roles; });
         G.setGuesses(st, votes, roles);
@@ -1235,6 +1272,7 @@
           "при подсчёте. До него никто не знает, кто победил.", null, "scales"));
       });
       court.pausesTimer = true;   // the secret round takes ~5 minutes: the round clock waits
+      court.showSay = G.guessableRoles(A.st, 0).length ? "Выбери, кто вор. Потом под каждым именем выбери роль или «Не знаю»." : "Выбери, кто вор.";
       A.push(court);
     },
 
@@ -1256,12 +1294,25 @@
         skip, "Следующая"));
     },
     sellLot: function (k) {
-      A.push(new TxDialog("auction", function (lot, winner, price) {
-        var lines = G.sellLot(A.st, lot, winner, price);
-        Sound.play("cash");
-        var body = lines.slice(1).join("\n") + "\n\nОтдай в банк " + money(price) + ". Молчи, ври или продай.";
-        A.push(new PrivateScene("Конверт " + (lot + 1), [winner], renderMessage(lines[0], body, true), null, false));
-      }, { lot: k }));
+      var self = this;
+      A.push(new TxDialog("auction", function (lot, winner, price) { self.sold(lot, winner, price); }, { lot: k }));
+    },
+    sold: function (lot, winner, price) {
+      this.bid = null;
+      var lines = G.sellLot(A.st, lot, winner, price);
+      Sound.play("cash");
+      var body = lines.slice(1).join("\n") + "\n\nОтдай в банк " + money(price) + ". Молчи, ври или продай.";
+      A.push(new PrivateScene("Конверт " + (lot + 1), [winner], renderMessage(lines[0], body, true), null, false));
+      A.save();
+    },
+    // Live bids (live game 2026-11-14: «а шаг какой?», bids of 205, 222, 283, and nobody remembered who led).
+    // A tap on a name = that player raises by AUCTION_STEP. Kept on the screen only: a reload starts the lot again.
+    raise: function (k, i) {
+      var b = this.bid && this.bid.k === k ? this.bid : (this.bid = { k: k, hist: [] });
+      var top = b.hist[b.hist.length - 1];
+      b.hist.push([i, top ? top[1] + C.AUCTION_STEP : C.AUCTION_START]);
+      Sound.play("click");
+      Voice.say(G.name(A.st, i) + ": " + b.hist[b.hist.length - 1][1]);
     },
     mail: function () {
       var st = A.st, letters = G.sendMail(st);
@@ -1282,8 +1333,8 @@
     },
     openSafe: function () { A.push(new SafeScene()); },
     myRole: function () {
-      A.push(new PickDialog("Кто смотрит свои улики и роль?", A.st.players.map(function (p, i) { return [p.name, i]; }), function (i) {
-        A.push(new PrivateScene("Мои улики", [i], renderAbility));
+      A.push(new PickDialog("Кто смотрит свою роль и улики?", A.st.players.map(function (p, i) { return [p.name, i]; }), function (i) {
+        A.push(new PrivateScene("Моя роль", [i], renderAbility));
       }));
     },
     duel: function () {
@@ -1349,7 +1400,7 @@
         btn("Другое", function () { self.newPrompt(); }, { cls: "slim" }));
       var why = h("details", { class: "card why" }, h("summary", null, h("span", { class: "label" }, "Зачем этот раунд и что делать")),
         h("p", { style: "margin-top:8px" }, G.fmt(rnd.why, R)),
-        h("ol", { class: "list muted small", style: "margin-top:6px" }, rnd.steps.map(function (s) { return h("li", null, s); })));
+        h("ol", { class: "list muted small", style: "margin-top:6px" }, rnd.steps.map(function (s) { return h("li", null, G.fmt(s, R)); })));
       if (!this.flags.whyClosed && (st.round_index === 1 || st.mode === "first")) why.open = true;
       return h("div", { class: "screen with-bar" }, top,
         h("div", { class: "stack" },
@@ -1361,9 +1412,36 @@
           this.players()),
         bar(btn("Деньги", function () { A.push(new TxDialog("money")); }, { cls: "slim" }),
           btn("Сделка", function () { A.push(new TxDialog("deal")); }, { cls: "slim" }),
-          btn("Мои улики", function () { self.myRole(); }, { cls: "slim" }),
+          btn("Моя роль", function () { self.myRole(); }, { cls: "slim" }),
           btn("Ещё", function () { A.push(new MoreDialog(self)); }, { cls: "slim" }),
           btn("Дальше »", function () { self.nextRound(); }, { kind: this.roundWarn() ? "" : "accent", cls: "slim grow" })));
+    },
+    // A riddle nobody solved in RIDDLE_HINT_SEC gets a hint by itself: the answer's first letter and length
+    // (live game 2026-11-14: «одно ухо» took 9 of 12 minutes). The answer is public anyway, so it is spoken too.
+    riddleSpot: function () {
+      var st = A.st;
+      if (st.round_index === 2 && st.clue_step < C.TOTAL_CLUES) return ["c" + st.clue_step, G.clueSpot(st, st.clue_step)];
+      if (st.round_index === 5 && st.trial_done && st.fragment_step < 2) return ["f" + st.fragment_step, G.fragmentSpot(st, st.fragment_step)];
+      return null;
+    },
+    riddleClock: function (dt) {
+      var cur = this.riddleSpot();
+      if (!cur) { this.rKey = null; return; }
+      if (cur[0] !== this.rKey) { this.rKey = cur[0]; this.rT = 0; this.rHint = false; }
+      this.rT += dt;
+      var el = document.getElementById("riddle-wait");
+      if (el) el.textContent = mmss(Math.max(0, C.RIDDLE_HINT_SEC - this.rT));
+      if (!this.rHint && this.rT >= C.RIDDLE_HINT_SEC) {
+        this.rHint = true;
+        Sound.play("chime");
+        Voice.say("Подсказка к загадке: " + riddleHintSpoken(cur[1].answer));
+        renderSoon();
+      }
+    },
+    riddleHelp: function () {
+      return this.rHint ? h("p", { class: "gold big" }, "Подсказка: " + riddleHintMask(this.riddleSpot()[1].answer))
+        : h("p", { class: "muted small" }, "Не получается? Подсказка появится сама через ", h("b", { id: "riddle-wait" },
+          mmss(Math.max(0, C.RIDDLE_HINT_SEC - (this.rT || 0)))), ".");
     },
     playerChips: function (can, cb, hider) {
       var st = A.st;
@@ -1391,7 +1469,7 @@
       if (st.clue_step >= C.TOTAL_CLUES) return card("Все загадки пройдены", h("p", { class: "big green" }, "Жмите «Дальше» — чёрный рынок."), { icon: "magnifier" });
       var spot = G.clueSpot(st, st.clue_step);
       return h("div", { class: "stack" },
-        card("Загадка " + (st.clue_step + 1) + " из 3 — где лежит «УЛИКА»?", h("p", { class: "riddle" }, "«" + spot.riddle + "»"), { icon: "magnifier" }),
+        card("Загадка " + (st.clue_step + 1) + " из 3 — где лежит «УЛИКА»?", [h("p", { class: "riddle" }, "«" + spot.riddle + "»"), this.riddleHelp()], { icon: "magnifier" }),
         h("p", null, "Кто нашёл бумажку и принёс к телефону?"),
         this.playerChips(function (i) { return G.canFindClue(st, i); }, function (i) { self.foundClue(i); }, st.clue_hider),
         btn("Не можем найти — ответ", function () { self.showAnswer(spot.answer, function () { G.skipClue(st); }); }, { kind: "ghost", cls: "slim" }));
@@ -1400,14 +1478,27 @@
       var self = this, st = A.st, k = st.lot_step;
       if (k >= st.lot_ids.length) return card("Торги закончены", h("p", { class: "big green" }, "Жмите «Дальше» — тайные сделки."), { icon: "envelope" });
       var kind = G.lot(st, k)[1];
+      var hist = this.bid && this.bid.k === k ? this.bid.hist : [];
+      var top = hist[hist.length - 1], next = top ? top[1] + C.AUCTION_STEP : C.AUCTION_START;
       return h("div", { class: "stack" },
-        card("Конверт " + (k + 1) + " из " + st.lot_ids.length + " · старт 100 ₽", [
+        card("Конверт " + (k + 1) + " из " + st.lot_ids.length + " · старт " + money(C.AUCTION_START) + " · шаг " + money(C.AUCTION_STEP), [
           h("p", { class: "riddle" }, "На конверте надпись: «" + D.TEASERS[kind] + "»"),
           h("p", { class: "muted small", style: "margin-top:6px" }, "Внутри всегда: подсказка «кто не вор» + сюрприз (деньги, штраф, карта или " +
             "цифра кода). Колода из 30 конвертов — каждый раз новые.")], { icon: "envelope" }),
-        btn("Продано! Кто купил конверт " + (k + 1) + "?", function () { self.sellLot(k); }, { kind: "accent big" }),
-        btn("Никто не купил", function () { G.skipLot(st, k); }, { kind: "ghost", cls: "slim" }),
-        k === 0 ? h("p", { class: "muted small" }, "Шпион может заглянуть в конверт до торгов: «Мои улики».") : null);
+        h("div", { class: "card" },
+          h("div", { class: "label" }, "Ставка"),
+          h("div", { class: "amount" }, top ? money(top[1]) + " — " + G.name(st, top[0]) : "Пока никто"),
+          h("p", { class: "muted small", style: "margin:4px 0 8px" }, "Кто поднимает — нажми своё имя: ставка станет " + money(next) + "."),
+          h("div", { class: "chips" }, st.players.map(function (p, i) {
+            return btn(p.name, function () { self.raise(k, i); }, { disabled: (top && top[0] === i) || p.balance < next });
+          })),
+          hist.length ? h("div", { class: "row", style: "margin-top:10px" },
+            btn("Отменить ставку", function () { hist.pop(); }, { kind: "ghost", cls: "slim" })) : null),
+        top ? btn("Продано: " + G.name(st, top[0]) + " за " + money(top[1]), function () { self.sold(k, top[0], top[1]); }, { kind: "accent big" }) : null,
+        h("div", { class: "row" },
+          btn("Ввести вручную", function () { self.sellLot(k); }, { kind: "ghost", cls: "slim" }),
+          btn("Никто не купил", function () { self.bid = null; G.skipLot(st, k); }, { kind: "ghost", cls: "slim" })),
+        k === 0 ? h("p", { class: "muted small" }, "Шпион может заглянуть в конверт до торгов: «Моя роль».") : null);
     },
     area4: function () {
       var st = A.st, deals = st.log.filter(function (l) { return l.indexOf("Сделка: ") === 0; }).map(function (l) { return l.slice(8); });
@@ -1430,7 +1521,7 @@
       if (st.fragment_step < 2) {
         var spot = G.fragmentSpot(st, st.fragment_step);
         return h("div", { class: "stack" },
-          card("Шаг 2 из 3 — где «ФРАГМЕНТ» №" + (st.fragment_step + 2) + "?", h("p", { class: "riddle" }, "«" + spot.riddle + "»"), { icon: "magnifier" }),
+          card("Шаг 2 из 3 — где «ФРАГМЕНТ» №" + (st.fragment_step + 2) + "?", [h("p", { class: "riddle" }, "«" + spot.riddle + "»"), this.riddleHelp()], { icon: "magnifier" }),
           h("p", null, "Кто нашёл бумажку «ФРАГМЕНТ»?"),
           this.playerChips(function (i) { return G.canFindFragment(st, i); }, function (i) { self.foundFragment(i); }, st.fragment_hider),
           btn("Не можем найти — ответ", function () { self.showAnswer(spot.answer, function () { G.skipFragment(st); }); }, { kind: "ghost", cls: "slim" }));
@@ -1450,7 +1541,7 @@
       return h("div", { class: "stack" },
         card("Порядок суда", h("p", { class: "big" }, "Сначала речи (по 30 секунд, таймер сам переключает). Потом голосование."), { icon: "scales" }),
         h("div", { class: "row" }, btn("1. Речи", function () { self.speeches(); }, { kind: this.flags.speeches ? "" : "accent big" }),
-          btn("2. Кто есть кто", function () { self.court(); }, { kind: "accent big" })),
+          btn("2. " + rules().COURT_TITLE, function () { self.court(); }, { kind: "accent big" })),
         st.safe_opened_by === null && st.players.some(function (p) { return !p.safe_tried; })
           ? btn("Последний шанс: сейф", function () { self.openSafe(); }, { kind: "danger", cls: "slim" }) : null);
     },
@@ -1525,13 +1616,22 @@
   });
 
   // ===================================================================== final
-  // «Your role was named by k of n−1» — shown only after the reveal.
+  // How many guesses this player got right at court (the thief vote counts as one) — shown only after the reveal.
   function guessLine(j) {
     var st = A.st;
     if (!st.players.some(function (p) { return p.guesses && Object.keys(p.guesses).length; })) return "";
     var g = st.players[j].guesses || {};
     var right = Object.keys(g).filter(function (k) { return st.players[+k].role === g[k]; }).length;
-    return " · роль угадали " + G.guessedBy(st, j) + " из " + (st.players.length - 1) + " · сам угадал ролей: " + right;
+    return " · угадал на суде: " + right + (right ? " (+" + money(right * C.GUESS_REWARD) + ")" : "");
+  }
+
+  // The mission, condition by condition: ✓ done / ✗ not done, with the numbers.
+  function missionList(st, j, done) {
+    return h("div", null,
+      h("div", { class: "small " + (done ? "green" : "red"), style: "font-weight:700" }, done ? "Миссия выполнена: +" + money(C.MISSION_BONUS) : "Миссия провалена"),
+      h("ul", { class: "checks small" }, G.missionChecks(st, j).map(function (c) {
+        return h("li", { class: c[0] ? "green" : "red" }, (c[0] ? "✓ " : "✗ ") + c[1]);
+      })));
   }
 
   var FinalScene = inherit(function () {
@@ -1569,11 +1669,13 @@
           return h("div", { class: "card res " + (r.place === 1 ? "gold deco" : "") },
             h("div", { class: "place" }, r.place),
             h("div", { class: "info" }, h("b", { style: "font-size:19px" }, r.name), h("div", { class: "gold small", style: "font-weight:800" }, D.ROLES[r.role].name),
-              h("div", { class: "small " + (r.mission ? "green" : "red") }, r.mission ? "Миссия выполнена: +" + money(C.MISSION_BONUS) : "Миссия провалена: " + r.reasons.join(", ")),
+              missionList(st, r.index, r.mission),
               h("div", { class: "muted small" }, "на руках " + money(r.money) + guessLine(r.index))),
             h("div", { class: "tot" }, money(r.total)));
         })),
         h("p", { class: "gold", style: "margin:14px 0" }, notes.join(" ")),
+        h("p", { class: "muted small", style: "margin-bottom:14px" }, "Подсказки считаются те, что на доске в телефоне: улики, конверты, " +
+          "способность детектива и купленные с гарантией нотариуса. Сказанные шёпотом не считаются — телефон их не видит."),
         h("div", { class: "grid2" },
           btn("Кубик", function () {
             A.push(new RollsDialog("Финальная дуэль", winners.map(function (r) { return [r.index, r.name]; }), function () {}, { uniqueTop: true }));

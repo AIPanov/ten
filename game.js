@@ -36,7 +36,33 @@
     r.FREE_TXT = bonus ? " и получает " + bonus + " ₽ от банка" : "";
     r.EXPOSE_TXT = r.EXPOSE_SLACK ? "все, кроме одного" : "все остальные";
     r.GUESS_REWARD = C.GUESS_REWARD;
+    Object.assign(r, courtTexts(r));
     return r;
+  }
+  // See court_texts in game/config.py — keep the two in sync.
+  function courtTexts(r) {
+    var GR = C.GUESS_REWARD;
+    if (r.GUESS_ROLES !== false) return {
+      EXPOSE_GOAL: "Не быть разгаданным: твою роль не должны угадать " + r.EXPOSE_TXT + ".",
+      EXPOSE_RISK: " (угадают твою роль " + r.EXPOSE_TXT + " — миссия провалена)",
+      COURT_TITLE: "Кто есть кто",
+      COURT_AND_ROLES: " — и угадает, кто есть кто",
+      COURT_TAIL_SPEECH: "За каждую угаданную роль — сто рублей, тайно, при подсчёте. А того, чью роль угадали " +
+        r.EXPOSE_TXT + ", ждёт провал миссии.",
+      COURT_TAIL_WHY: "Каждая верная роль — +" + GR + " ₽ при подсчёте; чью роль угадали " + r.EXPOSE_TXT + " — миссия провалена.",
+      COURT_STEP: "«Кто есть кто»: каждый тайно выбирает вора и ставит роли остальным (~40 секунд на человека, " +
+        "таймер ждёт). Всё откроется только при подсчёте.",
+    };
+    return {
+      EXPOSE_GOAL: "",
+      EXPOSE_RISK: "",
+      COURT_TITLE: "Кто вор",
+      COURT_AND_ROLES: "",
+      COURT_TAIL_SPEECH: "Угадал вора — сто рублей, тайно, при подсчёте. Если вора назовут все остальные, он проваливает миссию.",
+      COURT_TAIL_WHY: "Угадал вора — +" + GR + " ₽ при подсчёте. Назвали вора все остальные — его миссия провалена. " +
+        "Втроём роли не угадывают: зная себя и вора, легко вычислить третьего.",
+      COURT_STEP: "«Кто вор»: каждый тайно называет вора (~20 секунд на человека, таймер ждёт). Всё откроется только при подсчёте.",
+    };
   }
   function rolesFor(n, rng) {
     if (n === 3) return [THIEF, DETECTIVE, choice(rng, [SPY, AFERIST])];
@@ -489,6 +515,7 @@
 
   // Court «who is who» — see GameState.set_guesses in game/state.py.
   G.guessableRoles = function (st, i) {
+    if (G.rulesOf(st).GUESS_ROLES === false) return [];   // 3 players: only «who is the thief»
     var n = st.players.length;
     var pool = D.ROLE_IDS.concat(n >= 5 ? [ACCOMPLICE] : [], n >= 6 ? [NOTARY] : []);
     return pool.filter(function (r) { return r !== THIEF; });   // same list for everyone: see guessable_roles
@@ -496,7 +523,8 @@
   G.setGuesses = function (st, votes, roles) {
     st.players.forEach(function (p, i) {
       var g = {}, mine = (roles && roles[i]) || {};
-      Object.keys(mine).forEach(function (j) { if (mine[j] && +j !== i) g[String(j)] = mine[j]; });
+      var pool = G.guessableRoles(st, i);
+      Object.keys(mine).forEach(function (j) { if (mine[j] && +j !== i && pool.indexOf(mine[j]) >= 0) g[String(j)] = mine[j]; });
       // each role belongs to one person: a role put on several players counts for none of them
       var vals = Object.keys(g).map(function (j) { return g[j]; });
       Object.keys(g).forEach(function (j) {
@@ -621,31 +649,43 @@
     });
     return lines;
   };
-  G.checkMission = function (st, i) {
-    var p = st.players[i], R = G.rulesOf(st), miss = [];
+  // Every condition with the player's numbers: [done, text]. See mission_checks in game/scoring.py.
+  G.missionChecks = function (st, i) {
+    var p = st.players[i], R = G.rulesOf(st), out = [], n1 = st.players.length - 1, k, need;
+    function add(ok, yes, no) { out.push([!!ok, ok ? yes : no]); }
+    function moneyGoal(m) { add(p.balance >= m, "денег " + p.balance + " ₽ — нужно от " + m + " ₽", "меньше " + m + " ₽"); }
     if (p.role === THIEF) {
-      if (st.safe_opened_by !== i) miss.push("не вскрыл сейф");
+      add(st.safe_opened_by === i, "вскрыл сейф", "не вскрыл сейф");
     } else if (p.role === DETECTIVE) {
-      if (p.hints.length < R.DETECTIVE_MIN_HINTS) miss.push("подсказок " + p.hints.length + " из " + R.DETECTIVE_MIN_HINTS);
-      if (p.vote !== G.thief(st)) miss.push("на суде назван не вор");
+      k = p.hints.length; need = R.DETECTIVE_MIN_HINTS;
+      add(k >= need, "подсказок " + k + " из " + need, "подсказок " + k + " из " + need);
+      add(p.vote === G.thief(st), "на суде назвал вора", "на суде назван не вор");
     } else if (p.role === SPY) {
-      if (new Set(p.deal_partners).size < 2) miss.push("нет сделок с двумя разными игроками");
-      if (p.balance < R.SPY_MIN) miss.push("меньше " + R.SPY_MIN + " ₽");
+      k = new Set(p.deal_partners).size;
+      add(k >= 2, "сделки с разными игроками: " + k, "нет сделок с двумя разными игроками");
+      moneyGoal(R.SPY_MIN);
     } else if (p.role === AFERIST) {
-      if (p.balance < R.AFERIST_MIN) miss.push("меньше " + R.AFERIST_MIN + " ₽");
-      if (p.auctions_won < 1) miss.push("не выиграл ни одного лота");
-      if (!p.deal_partners.length) miss.push("нет ни одной сделки");
+      moneyGoal(R.AFERIST_MIN);
+      add(p.auctions_won >= 1, "выиграл лотов: " + p.auctions_won, "не выиграл ни одного лота");
+      add(p.deal_partners.length, "сделок: " + p.deal_partners.length, "нет ни одной сделки");
     } else if (p.role === ACCOMPLICE) {
-      if (G.exposed(st, G.thief(st))) miss.push("вора разгадали на суде (" + G.guessedBy(st, G.thief(st)) + " из " + (st.players.length - 1) + ")");
-      if (p.balance < R.ACCOMPLICE_MIN) miss.push("меньше " + R.ACCOMPLICE_MIN + " ₽");
+      k = G.guessedBy(st, G.thief(st));
+      add(!G.exposed(st, G.thief(st)), "вора не разгадали (" + k + " из " + n1 + ")", "вора разгадали на суде (" + k + " из " + n1 + ")");
+      moneyGoal(R.ACCOMPLICE_MIN);
     } else if (p.role === NOTARY) {
-      var book = (st.notary_book || []).length;
-      if (book < R.NOTARY_DEALS) miss.push("сделок с гарантией " + book + " из " + R.NOTARY_DEALS);
-      if (p.balance < R.NOTARY_MIN) miss.push("меньше " + R.NOTARY_MIN + " ₽");
-      if (!p.deal_partners.length) miss.push("нет ни одной своей сделки");
+      k = (st.notary_book || []).length; need = R.NOTARY_DEALS;
+      add(k >= need, "сделок с гарантией " + k + " из " + need, "сделок с гарантией " + k + " из " + need);
+      moneyGoal(R.NOTARY_MIN);
+      add(p.deal_partners.length, "своих сделок: " + p.deal_partners.length, "нет ни одной своей сделки");
     }
-    if (G.exposed(st, i)) miss.push("разгадан на суде: роль назвали " + G.guessedBy(st, i) + " из " + (st.players.length - 1));
-    return miss;
+    if (p.role === THIEF || R.GUESS_ROLES !== false) {   // 3 players: only the thief can be «exposed»
+      k = G.guessedBy(st, i);
+      add(!G.exposed(st, i), "не разгадан: роль назвали " + k + " из " + n1, "разгадан на суде: роль назвали " + k + " из " + n1);
+    }
+    return out;
+  };
+  G.checkMission = function (st, i) {
+    return G.missionChecks(st, i).filter(function (c) { return !c[0]; }).map(function (c) { return c[1]; });
   };
   G.finalResults = function (st) {
     var res = st.players.map(function (p, i) {
